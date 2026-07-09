@@ -1,0 +1,10 @@
+discord.py==2.3.2
+python-dotenv
+requests
+yt-dlp
+Pillow
+ffmpeg
+pynacl
+davey
+aiohttp>=3.7.4,<4
+audioop-lts>=0.2
