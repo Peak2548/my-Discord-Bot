@@ -46,12 +46,14 @@ UNCLOSED_THINK_RE = re.compile(r"<think>.*", re.DOTALL)
 def build_system_prompt(bot_name: str) -> dict:
     content = (
         f"You are a Discord bot named '{bot_name}'. You are chatting in a shared group.\n"
-        "Every message from a user will start with their name, formatted exactly as 'Name: message'.\n"
-        "For example, if you see 'Peaku: Hello!', it means the user named 'Peaku' is speaking to you.\n"
-        "ALWAYS pay attention to the name before the colon (:) in the MOST RECENT message so you know exactly who you are talking to right now.\n"
+        "Every message from a user will start with their literal name wrapped in square brackets, formatted exactly as '[Name]: message'.\n"
+        "For example, if you see '[Peaku]: Hello!', it means the user named 'Peaku' is speaking to you.\n"
+        "ALWAYS pay attention to the exact text inside the brackets '[ ]' of the MOST RECENT message so you know exactly who you are talking to right now.\n"
+        "CRITICAL: Treat the entire text inside the brackets as a SINGLE literal user name. Do not split, break, or semantically interpret the name even if it contains spaces, symbols, or multiple words (e.g., if the name is '[Peaku ! Ruk บี๋]', their name is 'Peaku ! Ruk บี๋', do not split it into Peaku and Ruk บี๋).\n"
         f"If asked who you are, your name is '{bot_name}'.\n"
-        "If a user asks who THEY are (e.g., 'Who am I?' or 'เราชื่ออะไร'), answer with their name from the current message prefix.\n"
-        "Be concise and answer directly."
+        "If a user asks who THEY are (e.g., 'Who am I?' or 'เราชื่ออะไร'), answer with their exact name from inside the brackets of the current message prefix.\n"
+        "Be concise and answer directly.\n"
+        "IMPORTANT: Always reply in the exact same language that the user used in their message."
     )
     return {"role": "system", "content": content}
 
@@ -86,7 +88,8 @@ class AI(commands.Cog):
         for attempt in range(max_retries):
             try:
                 with DDGS() as ddgs:
-                    results = list(ddgs.text(query, max_results=3, timeout=10))
+                    # เปิดโหมด safesearch="moderate" เพื่อบล็อกเนื้อหาที่ไม่เหมาะสมหรือเว็บเทาๆ
+                    results = list(ddgs.text(query, max_results=3, safesearch="moderate", timeout=10))
                     if not results:
                         return "🔍 No relevant search results found."
 
@@ -109,12 +112,47 @@ class AI(commands.Cog):
             await ctx.send("❌ Please provide a search query after the command.")
             return
         
-        status_msg = await ctx.send("🔍 Searching the web...")
-        result = await self.execute_search(query)
-        if "Could not search" in result or "failed" in result.lower():
-            await ctx.send(f"⚠️ {result}")
-        else:
-            await status_msg.edit(content=result)
+        status_msg = await ctx.send("🔍 Searching the web and thinking...")
+        
+        async with ctx.typing():
+            search_result = await self.execute_search(query)
+            
+        if "Could not search" in search_result or "failed" in search_result.lower():
+            await status_msg.edit(content=f"⚠️ {search_result}")
+            return
+
+        # ให้ AI สรุปผลการค้นหาเว็บแทนการพ่นลิงก์ดิบ
+        history = self.get_channel_history(ctx.channel.id)
+        original_user_content = f"[{ctx.author.display_name}]: {query}"
+        
+        prompt_with_search = (
+            f"{original_user_content}\n\n"
+            f"[Latest web search results]\n{search_result}\n"
+            "(Please summarize the answer logically based ONLY on the search data above. Do not output raw links unless necessary.)"
+        )
+        
+        temp_history = history + [{"role": "user", "content": prompt_with_search}]
+        
+        async with ctx.typing():
+            reply, _ = await self.generate(self.chat_model, temp_history, num_predict=2048)
+
+        # ล้างคำนำหน้าชื่อบอทที่หลอนติดมา
+        bot_name = self.bot.user.name if self.bot.user else ""
+        if bot_name and reply.lower().startswith(f"{bot_name.lower()}:"):
+            reply = reply[len(bot_name)+1:].strip()
+        elif bot_name and reply.lower().startswith(f"[{bot_name.lower()}]:"):
+            reply = reply[len(bot_name)+4:].strip()
+        elif reply.lower().startswith("ai:"):
+            reply = reply[3:].strip()
+        elif reply.lower().startswith("[ai]:"):
+            reply = reply[5:].strip()
+
+        await status_msg.edit(content=reply)
+
+        # บันทึกประวัติคุยที่สะอาด
+        history.append({"role": "user", "content": original_user_content})
+        history.append({"role": "assistant", "content": reply[:1500]})
+        self._trim_history(ctx.channel.id, history)
 
     async def generate(
         self,
@@ -172,9 +210,12 @@ class AI(commands.Cog):
         self.active_voice_channel = ctx.author.voice.channel if ctx.author.voice else None
 
         history = self.get_channel_history(ctx.channel.id)
-        user_content = f"{ctx.author.display_name}: {message}"
         
-        status_msg = None  # เปลี่ยนชื่อตัวแปรให้ชัดเจนเพื่อป้องกัน UnboundLocalError
+        # 🌟 จุดสำคัญ: ครอบชื่อผู้ใช้ด้วย [ ] เพื่อไม่ให้ AI แปลความหมายแยกชื่อเป็นคำๆ
+        original_user_content = f"[{ctx.author.display_name}]: {message}"
+        content_for_ai = original_user_content
+        
+        status_msg = None 
 
         # 1. เช็คคีย์เวิร์ดค้นหาเว็บ
         needs_search = any(keyword in message.lower() for keyword in SEARCH_TRIGGER_KEYWORDS)
@@ -185,32 +226,40 @@ class AI(commands.Cog):
                 search_result = await self.execute_search(message)
             
             if "Could not search" not in search_result:
-                user_content = (
-                    f"{user_content}\n\n"
+                content_for_ai = (
+                    f"{original_user_content}\n\n"
                     f"[Latest web search results for the question above]\n{search_result}\n"
                     "(Please answer based on this search data.)"
                 )
 
-        history.append({"role": "user", "content": user_content})
+        # 🌟 ส่งให้ AI ด้วยประวัติชั่วคราวที่มีข้อมูลค้นหาเว็บ (ไม่ทำให้ประวัติหลักสกปรก)
+        temp_history = history + [{"role": "user", "content": content_for_ai}]
 
         # 2. ให้ AI สร้างคำตอบ
         async with ctx.typing():
-            reply, _ = await self.generate(self.chat_model, history, num_predict=2048)
+            reply, _ = await self.generate(self.chat_model, temp_history, num_predict=2048)
 
         logger.info("AI replied to [%s]", ctx.author.display_name)
 
         if not reply or not reply.strip():
             reply = "⚠️ Sorry, the model took too long processing and didn't return an answer."
 
+        # ลบชื่อบอท/AI หากมันหลอนพิมพ์ติดมาในรูปแบบต่างๆ
         bot_name = self.bot.user.name if self.bot.user else ""
         if bot_name and reply.lower().startswith(f"{bot_name.lower()}:"):
             reply = reply[len(bot_name)+1:].strip()
+        elif bot_name and reply.lower().startswith(f"[{bot_name.lower()}]:"):
+            reply = reply[len(bot_name)+4:].strip()
         elif reply.lower().startswith("ai:"):
             reply = reply[3:].strip()
+        elif reply.lower().startswith("[ai]:"):
+            reply = reply[5:].strip()
         elif reply.lower().startswith(f"{ctx.me.display_name.lower()}:"):
-             reply = reply[len(ctx.me.display_name)+1:].strip()
+            reply = reply[len(ctx.me.display_name)+1:].strip()
+        elif reply.lower().startswith(f"[{ctx.me.display_name.lower()}]:"):
+            reply = reply[len(ctx.me.display_name)+4:].strip()
 
-        # 3. อัปเดตข้อความบอท (แก้ไขจากจุดที่ทำให้เกิด Error)
+        # 3. อัปเดตข้อความบอท
         if status_msg is not None:
             try:
                 await status_msg.edit(content=reply)
@@ -219,6 +268,8 @@ class AI(commands.Cog):
         else:
             await ctx.send(reply)
 
+        # บันทึกประวัติคุยที่ไม่มีข้อมูลเว็บรกๆ เข้าสมองบอท
+        history.append({"role": "user", "content": original_user_content})
         history.append({"role": "assistant", "content": reply[:1500]})
         self._trim_history(ctx.channel.id, history)
 
@@ -243,19 +294,17 @@ class AI(commands.Cog):
             history = self.channel_conversations.get(ctx.channel.id, [])
             participants = set()
             
-            # วนลูปอ่านประวัติแชท ข้ามข้อความแรกที่เป็น System prompt ออกไปชัวร์ๆ
+            # ปรับตัวแกะชื่อในคำสั่ง !learn ให้ดึงชื่อจากระบบวงเล็บเหลี่ยมตัวใหม่
             for msg in history:
                 if msg.get("role") == "system":
                     continue
                 
                 content = msg.get("content", "")
-                if msg.get("role") == "user" and ":" in content:
-                    name_part = content.split(":")[0].strip()
-                    # ป้องกันการดึงเศษข้อความค้นหาเว็บมาแสดง
-                    if name_part and not name_part.startswith("**") and len(name_part) < 32:
+                if msg.get("role") == "user" and content.startswith("[") and "]:" in content:
+                    name_part = content.split("]:", 1)[0][1:].strip()
+                    if name_part and not name_part.startswith("**") and len(name_part) < 64:
                         participants.add(name_part)
                         
-            # ดึงชื่อบอทมาใส่ในฐานะผู้ร่วมคุยฝั่ง AI
             bot_name = self.bot.user.name if self.bot.user else "AI"
             
             participant_list = ", ".join(sorted(participants))
