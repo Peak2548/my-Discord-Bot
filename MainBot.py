@@ -35,11 +35,19 @@ async def on_ready():
 
 async def main():
     async with bot:
-        # บังคับให้ aiohttp ใช้ resolver มาตรฐานของระบบ (ThreadedResolver)
-        # แทน aiodns/pycares ที่บางเครื่อง/บาง venv resolve DNS ไม่ผ่าน (ทำให้เชื่อม discord.com ไม่ได้)
+        # Force aiohttp to use the system's standard resolver (ThreadedResolver)
+        # instead of aiodns/pycares, which fails to resolve DNS on some
+        # machines/venvs (causing "Could not contact DNS servers" and
+        # preventing connection to discord.com).
         bot.http.connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
 
-        # โหลด extension จากไฟล์ AI.py แทน BotCommands.py
+        # Load both extensions:
+        #  - BotCommands.py: Music + ImageGen cogs
+        #  - AI.py: the full-featured AI cog (shared channel history,
+        #    !models, real web search, etc.)
+        # These must NOT both define an "AI" cog / `!ai` command, or
+        # discord.py will raise a CommandRegistrationError on startup.
+        await bot.load_extension("BotCommands")
         await bot.load_extension("AI")
         await bot.start(TOKEN)
 
@@ -50,7 +58,7 @@ import atexit
 def cleanup_on_exit():
     import subprocess
     try:
-        subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe'], 
+        subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe'],
                       capture_output=True, create_no_window=True)
     except Exception:
         pass

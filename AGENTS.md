@@ -23,6 +23,12 @@ Bot exits with "TOKEN not found" error if `.env` is missing.
 ### 3. aiohttp DNS Resolution Fix
 MainBot.py line 40 uses `aiohttp.ThreadedResolver()` to avoid DNS failures on some systems. Do not remove this line.
 
+### 4. Missing pause Command
+BotCommands.py line 259-265: `pause` method missing `@commands.command(name="pause")` decorator - bot won't respond to `!pause`.
+
+### 5. Blocking requests in async functions
+BotCommands.py line 304/375: `requests.post()` must be wrapped with `loop.run_in_executor(None, ...)` or use `aiohttp` instead.
+
 ## 🛠️ External Services Required
 
 | Service | Port | Status Check |
@@ -46,7 +52,7 @@ aiohttp<4,>=3.7.4  # Must be <4 for ThreadedResolver fix
 
 ## 🔧 Architecture Notes
 
-- **MainBot.py**: Entry point, env loading, DNS resolver fix, ffmpeg cleanup on exit
+- **MainBot.py**: Entry point, env loading, DNS resolver fix
 - **BotCommands.py**: Music player, AI chat, image generation cogs (loads via `await bot.load_extension("AI")`)
 - **AI.py**: Main AI cog implementation with shared group chat memory per channel; deprecated alternative is in BotCommands.py
 
@@ -68,9 +74,6 @@ aiohttp<4,>=3.7.4  # Must be <4 for ThreadedResolver fix
 Bot has built-in retry logic (3 attempts). If still failing:
 - Check Discord server voice settings
 - Ensure you're in a voice channel when using commands
-
-### FFmpeg Cleanup
-Bot automatically kills `ffmpeg.exe` on exit via MainBot.py.
 
 ## 🧪 Testing Checklist
 

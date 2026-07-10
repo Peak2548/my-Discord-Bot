@@ -1,17 +1,31 @@
-import discord
-from discord.ext import commands
-import yt_dlp
+"""
+Discord bot cogs: music playback and Stable Diffusion image generation.
+
+Note: the AI chat/code/search cog now lives in its own AI.py file
+(loaded as a separate extension by MainBot.py), so it isn't defined here
+anymore — this avoids two cogs both registering a `!ai`/`!search` command.
+"""
+
 import asyncio
 import base64
-from collections import deque
 import io
-import requests
 import logging
+import subprocess
+from collections import deque
 from typing import Optional
+
+import discord
+import requests
+import yt_dlp
+from discord.ext import commands
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
+# ==========================================================================
+# Music cog
+# ==========================================================================
 
 class Music(commands.Cog):
     """Music player cog for Discord."""
@@ -121,6 +135,13 @@ class Music(commands.Cog):
         finally:
             self._connecting = False
 
+    def cleanup_ffmpeg(self) -> None:
+        """Force-kill any lingering ffmpeg.exe process after stopping playback."""
+        try:
+            subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe'], capture_output=True)
+        except Exception as e:
+            logger.warning(f"Non-fatal error while cleaning up ffmpeg: {e}")
+
     @commands.command(name="join", aliases=["j"])
     async def join(self, ctx: commands.Context):
         """Connect bot to the user's voice channel."""
@@ -129,16 +150,14 @@ class Music(commands.Cog):
             return
 
         channel = ctx.author.voice.channel
-
         existing_vc = ctx.guild.voice_client
         if existing_vc and existing_vc.is_connected():
             if existing_vc.channel == channel:
                 await ctx.send("✅ Already connected to your channel!")
-                return
             else:
                 await existing_vc.move_to(channel)
                 await ctx.send(f"✅ Moved to {channel}")
-                return
+            return
 
         try:
             await self.safe_connect(channel)
@@ -191,7 +210,6 @@ class Music(commands.Cog):
                     url = f"https://www.youtube.com/watch?v={video_id}"
 
             audio_url, title = await self.extract_audio(url)
-
             if not audio_url:
                 await loading_msg.edit(content="❌ Could not find audio URL")
                 return
@@ -208,8 +226,7 @@ class Music(commands.Cog):
                 await loading_msg.edit(content=f"▶️ Now playing: **{title}**")
             else:
                 self.queue.append((audio_url, title))
-                queue_pos = len(self.queue)
-                await loading_msg.edit(content=f"📝 Added to queue: **{title}** (Position: {queue_pos})")
+                await loading_msg.edit(content=f"📝 Added to queue: **{title}** (Position: {len(self.queue)})")
 
         except Exception as e:
             logger.error(f"Play error: {e}")
@@ -224,12 +241,8 @@ class Music(commands.Cog):
             await ctx.send("📭 Queue is empty!")
             return
 
-        queue_list = "\n".join([f"{i+1}. {title}" for i, (_, title) in enumerate(self.queue)])
-        embed = discord.Embed(
-            title="🎵 Current Queue",
-            description=queue_list,
-            color=discord.Color.blue()
-        )
+        queue_list = "\n".join(f"{i + 1}. {title}" for i, (_, title) in enumerate(self.queue))
+        embed = discord.Embed(title="🎵 Current Queue", description=queue_list, color=discord.Color.blue())
         embed.set_footer(text=f"Total songs: {len(self.queue)}")
         await ctx.send(embed=embed)
 
@@ -242,20 +255,24 @@ class Music(commands.Cog):
         else:
             await ctx.send("❌ Nothing is playing!")
 
-    @commands.command(name="stop", aliases=["s"])
+    @commands.command(name="stop", aliases=["st"])
     async def stop(self, ctx: commands.Context):
         """Stop and disconnect from voice channel."""
-        if ctx.voice_client:
-            self.queue.clear()
-            ctx.voice_client.stop()
-            try:
-                await asyncio.wait_for(ctx.voice_client.disconnect(), timeout=10.0)
-                self.cleanup_ffmpeg()
-            except (asyncio.TimeoutError, Exception):
-                self.cleanup_ffmpeg()
-            await ctx.send("⏹️ Stopped and disconnected!")
-        else:
+        if not ctx.voice_client:
             await ctx.send("❌ I'm not connected!")
+            return
+
+        self.queue.clear()
+        ctx.voice_client.stop()
+        try:
+            await asyncio.wait_for(ctx.voice_client.disconnect(), timeout=10.0)
+        except asyncio.TimeoutError:
+            pass
+        finally:
+            self.cleanup_ffmpeg()
+        await ctx.send("⏹️ Stopped and disconnected!")
+
+    @commands.command(name="pause", aliases=["ps"])
     async def pause(self, ctx: commands.Context):
         """Pause the current song."""
         if ctx.voice_client and ctx.voice_client.is_playing():
@@ -279,100 +296,42 @@ class Music(commands.Cog):
         self.queue.clear()
         await ctx.send("🗑️ Queue cleared!")
 
+# ==========================================================================
+# ImageGen cog — Stable Diffusion
+# ==========================================================================
 
-class AI(commands.Cog):
-    """AI chat and code generation cog."""
-
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        self.chat_model = "llama3.1:8b"
-        self.lmstudio_api = "http://127.0.0.1:1234/v1/chat/completions"
-
-    async def generate(self, model: str, prompt: str, num_predict: int = 1024) -> str:
-        """Generate AI response using LM Studio API."""
-        try:
-            payload = {
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": "You are a helpful AI assistant."},
-                    {"role": "user", "content": prompt}
-                ],
-                "temperature": 0.3,
-                "max_tokens": num_predict,
-                "stream": False
-            }
-            response = requests.post(self.lmstudio_api, json=payload, timeout=120)
-            response.raise_for_status()
-            data = response.json()
-            
-            # Handle different response formats
-            if "choices" in data and len(data["choices"]) > 0:
-                return data["choices"][0]["message"]["content"]
-            elif "content" in data:
-                return data["content"]
-            else:
-                return str(data)
-        except Exception as e:
-            logger.error(f"AI generation error: {e}")
-            return f"❌ Error: {str(e)}"
-
-    async def send_long_message(self, ctx: commands.Context, message: str):
-        """Send a long message in chunks to avoid Discord's message length limit."""
-        chunk_size = 1900
-        chunks = [message[i:i+chunk_size] for i in range(0, len(message), chunk_size)]
-        for chunk in chunks:
-            await ctx.send(chunk)
-
-    @commands.command(name="Auan", aliases=["a"])
-    async def auan(self, ctx: commands.Context):
-        """Echo 'Auan' command."""
-        await ctx.send("Auan")
-
-    @commands.command(name="ai")
-    async def ai_chat(self, ctx: commands.Context, *, message: str):
-        """Chat with AI."""
-        if not message:
-            await ctx.send("❌ Please provide a question!")
-            return
-        prompt = f"{message}"
-        async with ctx.typing():
-            reply = await self.generate(self.chat_model, prompt, num_predict=300)
-        await self.send_long_message(ctx, reply)
-
-    @commands.command(name="code")
-    async def ai_code(self, ctx: commands.Context, *, task: str):
-        """Generate code with AI."""
-        if not task:
-            await ctx.send("❌ Please specify what code you want!")
-            return
-        prompt = f"{task}\nand put the code in a code block"
-        async with ctx.typing():
-            reply = await self.generate(self.chat_model, prompt, num_predict=500)
-        await self.send_long_message(ctx, reply)
+SD_TXT2IMG_URL = "http://127.0.0.1:7860/sdapi/v1/txt2img"
+SD_REQUEST_TIMEOUT_SECONDS = 180
 
 
 class ImageGen(commands.Cog):
-    """Image generation cog using Stable Diffusion API."""
+    """Image generation cog using the Stable Diffusion WebUI API."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.sd_api = "http://127.0.0.1:7860/sdapi/v1/txt2img"
 
     @commands.command(name="image")
     async def generate_image(self, ctx: commands.Context, *, prompt: str):
-        """Generate an image from text prompt."""
-        await ctx.send(f"🎨 Generating image from prompt:\n> {prompt}")
+        """Generate an image from a text prompt."""
+        await ctx.send(f"🎨 Generating an image from prompt:\n> {prompt}")
+        loop = asyncio.get_event_loop()
+        payload = {
+            "prompt": prompt,
+            "width": 512,
+            "height": 512,
+            "steps": 25,
+            "sampler_name": "Euler a",
+            "batch_size": 1,
+            "override_settings": {"sd_model_checkpoint": "sd-v1-4.ckpt"},
+        }
+
         try:
-            payload = {
-                "prompt": prompt,
-                "width": 512,
-                "height": 512,
-                "steps": 25,
-                "sampler_name": "Euler a",
-                "batch_size": 1,
-                "override_settings": {"sd_model_checkpoint": "sd-v1-4.ckpt"}
-            }
-            response = requests.post(self.sd_api, json=payload, timeout=180)
+            # Same blocking-call concern as AI.generate() — offload to a
+            # thread so image generation doesn't freeze the bot either.
+            response = await loop.run_in_executor(
+                None,
+                lambda: requests.post(SD_TXT2IMG_URL, json=payload, timeout=SD_REQUEST_TIMEOUT_SECONDS),
+            )
             response.raise_for_status()
             data = response.json()
             image_bytes = base64.b64decode(data["images"][0])
@@ -381,14 +340,13 @@ class ImageGen(commands.Cog):
             await ctx.send(file=discord.File(fp=buffer, filename="image.png"))
         except requests.exceptions.RequestException as e:
             logger.error(f"Image generation request error: {e}")
-            await ctx.send(f"❌ Request failed: {str(e)}")
-        except Exception as e:
-            logger.error(f"Image generation error: {e}")
-            await ctx.send(f"❌ Error: {str(e)}")
+            await ctx.send("❌ Connection failed. Please check if Stable Diffusion is running.")
+        except Exception:
+            logger.exception("Image generation error")
+            await ctx.send("❌ Something went wrong generating the image.")
 
 
 async def setup(bot: commands.Bot):
     """Load all cogs."""
     await bot.add_cog(Music(bot))
-    await bot.add_cog(AI(bot))
     await bot.add_cog(ImageGen(bot))

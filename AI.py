@@ -56,12 +56,12 @@ UNCLOSED_THINK_RE = re.compile(r"<think>.*", re.DOTALL)
 def build_system_prompt(bot_name: str) -> dict:
     """Build the system message that seeds every new channel's history."""
     content = (
-        f"You are a Discord bot named '{bot_name}', not one of the human users in this "
-        "shared group chat.\n"
-        "Messages are formatted as 'Name: message' — that name is the sender, not you. "
-        "Multiple users share this history and some names may look similar (e.g. 'Peak' "
-        "vs 'Peaku') — always match the CURRENT message's sender, never reuse an earlier one.\n"
-        f"If asked who you are, answer '{bot_name}'.\n"
+        f"You are a Discord bot named '{bot_name}'. You are chatting in a shared group.\n"
+        "Every message from a user will start with their name, formatted exactly as 'Name: message'.\n"
+        "For example, if you see 'Peaku: Hello!', it means the user named 'Peaku' is speaking to you.\n"
+        "ALWAYS pay attention to the name before the colon (:) in the MOST RECENT message so you know exactly who you are talking to right now.\n"
+        f"If asked who you are, your name is '{bot_name}'.\n"
+        "If a user asks who THEY are (e.g., 'Who am I?' or 'เราชื่ออะไร'), answer with their name from the current message prefix.\n"
         "Be concise and answer directly."
     )
     return {"role": "system", "content": content}
@@ -124,7 +124,6 @@ class AI(commands.Cog):
                     lines.append(f"{i}. **{title}**\n   🔗 {href}\n   📄 {body}")
                 return "🔍 Search Results:\n" + "\n".join(lines)
         except Exception:
-            logger.exception("Web search failed")
             return "⚠️ Could not search the web."
 
     @commands.command(name="search", aliases=["s"])
@@ -133,9 +132,10 @@ class AI(commands.Cog):
         if not query:
             await ctx.send("❌ Please provide a search query after the command.")
             return
-        async with ctx.typing():
-            result = await self.execute_search(query)
-        await ctx.send(result)
+        
+        status = await ctx.send("🔍 Searching the web...")
+        result = await self.execute_search(query)
+        await status.edit(content=result)
 
     # ----------------------------------------------------------------
     # LM Studio generation
@@ -280,14 +280,16 @@ class AI(commands.Cog):
         history = self.get_channel_history(ctx.channel.id)
         user_content = f"{ctx.author.display_name}: {message}"
 
+        # 1. 🌟 เพิ่มบรรทัดนี้ลงไปเพื่อประกาศตัวแปรไว้ก่อน
+        status = None
+
         needs_search = any(keyword in message.lower() for keyword in SEARCH_TRIGGER_KEYWORDS)
         if needs_search:
+            # 2. 🌟 ถ้ามีการค้นหา ให้เก็บ message object ลงใน status
+            status = await ctx.send("🔍 Searching the web...")
             async with ctx.typing():
                 search_result = await self.execute_search(message)
-            # Fold the search result into the SAME user message rather than
-            # adding a second "system" message — the Qwen3.5 template requires
-            # `system` to be the very first message in the list, so inserting
-            # one mid-conversation raises a hard 400 error.
+            
             user_content = (
                 f"{user_content}\n\n"
                 f"[Latest web search results for the question above]\n{search_result}\n"
@@ -307,7 +309,11 @@ class AI(commands.Cog):
                 "Try rephrasing your question or use `!models` to switch models."
             )
 
-        await ctx.send(reply)
+        # 3. 🌟 ปรับการส่งข้อความตรงนี้
+        if status:
+            await status.edit(content=reply) # ถ้ามีการค้นหาเว็บ ให้แก้ข้อความ "Searching..." เป็นคำตอบ AI
+        else:
+            await ctx.send(reply)            # ถ้าคุยปกติ ให้ส่งเป็นข้อความตอบกลับใหม่เลย
 
         history.append({"role": "assistant", "content": reply[:1500]})
         self._trim_history(ctx.channel.id, history)
@@ -372,10 +378,7 @@ class ModelPickerSelect(discord.ui.Select):
             return
 
         await interaction.response.send_message(
-            f"⏳ **Preparing model:** `{selected}`\n"
-            "🧹 Unloading other models...\n"
-            "🚀 Loading the new model...\n"
-            "*(please wait a moment)*"
+            f"⏳ **Loading:** `{selected}`..."
         )
         await self._unload_and_load(interaction, selected)
 
@@ -390,9 +393,7 @@ class ModelPickerSelect(discord.ui.Select):
                 load_payload = {"model": selected}
                 async with session.post(MODEL_LOAD_URL, headers=headers, json=load_payload, timeout=load_timeout) as resp:
                     if resp.status == 200:
-                        await interaction.followup.send(
-                            f"✅ **Done!** Switched to model `{selected}` and cleared the old one from RAM."
-                        )
+                        await interaction.followup.send(f"✅ Model `{selected}` loaded.")
                     else:
                         await interaction.followup.send(f"⚠️ Sent the load request, but got Error {resp.status}")
         except Exception:
