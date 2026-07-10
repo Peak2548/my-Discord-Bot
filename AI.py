@@ -110,21 +110,26 @@ class AI(commands.Cog):
 
     async def execute_search(self, query: str) -> str:
         """Run a DuckDuckGo search and return a short, formatted summary."""
-        try:
-            with DDGS() as ddgs:
-                results = list(ddgs.text(query, max_results=3, timeout=10))
-                if not results:
-                    return "🔍 No relevant search results found."
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                with DDGS() as ddgs:
+                    results = list(ddgs.text(query, max_results=3, timeout=10))
+                    if not results:
+                        return "🔍 No relevant search results found."
 
-                lines = []
-                for i, result in enumerate(results, 1):
-                    title = result.get("title", "No title")[:70]
-                    href = result.get("href", "")
-                    body = result.get("body", "")[:150]
-                    lines.append(f"{i}. **{title}**\n   🔗 {href}\n   📄 {body}")
-                return "🔍 Search Results:\n" + "\n".join(lines)
-        except Exception:
-            return "⚠️ Could not search the web."
+                    lines = []
+                    for i, result in enumerate(results, 1):
+                        title = result.get("title", "No title")[:70]
+                        href = result.get("href", "")
+                        body = result.get("body", "")[:150]
+                        lines.append(f"{i}. **{title}**\n   🔗 {href}\n   📄 {body}")
+                    return "🔍 Search Results:\n" + "\n".join(lines)
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    return f"⚠️ Search failed after {max_retries} attempts. Try rephrasing your question."
+                continue
+        return "⚠️ Could not search the web."
 
     @commands.command(name="search", aliases=["s"])
     async def search_command(self, ctx: commands.Context, *, query: str):
@@ -135,7 +140,10 @@ class AI(commands.Cog):
         
         status = await ctx.send("🔍 Searching the web...")
         result = await self.execute_search(query)
-        await status.edit(content=result)
+        if "Could not search" in result or "failed" in result.lower():
+            await ctx.send(f"⚠️ {result}")
+        else:
+            await status.edit(content=result)
 
     # ----------------------------------------------------------------
     # LM Studio generation
@@ -280,21 +288,18 @@ class AI(commands.Cog):
         history = self.get_channel_history(ctx.channel.id)
         user_content = f"{ctx.author.display_name}: {message}"
 
-        # 1. 🌟 เพิ่มบรรทัดนี้ลงไปเพื่อประกาศตัวแปรไว้ก่อน
-        status = None
-
         needs_search = any(keyword in message.lower() for keyword in SEARCH_TRIGGER_KEYWORDS)
         if needs_search:
-            # 2. 🌟 ถ้ามีการค้นหา ให้เก็บ message object ลงใน status
             status = await ctx.send("🔍 Searching the web...")
             async with ctx.typing():
                 search_result = await self.execute_search(message)
             
-            user_content = (
-                f"{user_content}\n\n"
-                f"[Latest web search results for the question above]\n{search_result}\n"
-                "(Please answer based on this search data.)"
-            )
+            if "Could not search" not in search_result:
+                user_content = (
+                    f"{user_content}\n\n"
+                    f"[Latest web search results for the question above]\n{search_result}\n"
+                    "(Please answer based on this search data.)"
+                )
 
         history.append({"role": "user", "content": user_content})
 
