@@ -154,23 +154,4 @@ Bot has built-in retry logic (3 attempts). If still failing:
 
 ---
 
-## 🧪 Testing Checklist
 
-1. ✅ Python version ≥ 3.8
-2. ✅ LM Studio running with model loaded on port 1234
-3. ✅ Stable Diffusion running on port 7860 (for image gen)
-4. ✅ FFmpeg installed system-wide
-5. ✅ .env file with valid TOKEN
-6. ✅ aiohttp version < 4
-
----
-
-## 📝 License
-
-This project is licensed under the MIT License.
-
----
-
-## 🔗 Support
-
-For issues or questions, please open an issue on GitHub.
