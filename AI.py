@@ -1,11 +1,12 @@
 import asyncio
 import logging
 import re
+import urllib.parse
 
 import aiohttp
 import discord
+from bs4 import BeautifulSoup
 from discord.ext import commands
-from ddgs import DDGS
 
 logger = logging.getLogger(__name__)
 
@@ -84,27 +85,60 @@ class AI(commands.Cog):
             self.channel_conversations[channel_id] = [history[0]] + history[-HISTORY_KEEP_RECENT:]
 
     async def execute_search(self, query: str) -> str:
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                with DDGS() as ddgs:
-                    # เปิดโหมด safesearch="moderate" เพื่อบล็อกเนื้อหาที่ไม่เหมาะสมหรือเว็บเทาๆ
-                    results = list(ddgs.text(query, max_results=3, safesearch="moderate", timeout=10))
-                    if not results:
-                        return "🔍 No relevant search results found."
+        """ดึงข้อมูลจาก DuckDuckGo HTML search (ไม่ต้องใช้ JS, ไม่มี CAPTCHA wall แบบ Google)"""
+        url = "https://html.duckduckgo.com/html/"
+        params = {"q": query}
 
-                    lines = []
-                    for i, result in enumerate(results, 1):
-                        title = result.get("title", "No title")[:70]
-                        href = result.get("href", "")
-                        body = result.get("body", "")[:150]
-                        lines.append(f"{i}. **{title}**\n   🔗 {href}\n   📄 {body}")
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept-Language": "th,en-US;q=0.9,en;q=0.8"
+        }
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(url, data=params, headers=headers, timeout=10) as resp:
+                    if resp.status == 429:
+                        return "⚠️ ระบบค้นหาป้องกันการค้นหาถี่เกินไป (โดนบล็อกชั่วคราว) โปรดรอสักครู่"
+                    if resp.status != 200:
+                        return f"⚠️ ระบบค้นหาปฏิเสธการเข้าถึง (รหัสข้อผิดพลาด {resp.status})"
+
+                    html = await resp.text()
+                    soup = BeautifulSoup(html, "html.parser")
+
+                    results = []
+                    # DuckDuckGo HTML: แต่ละผลลัพธ์อยู่ใน div.result
+                    for result in soup.find_all('div', class_='result')[:5]:
+                        title_tag = result.find('a', class_='result__a')
+                        desc_tag = result.find('a', class_='result__snippet') or result.find('div', class_='result__snippet')
+
+                        if not title_tag:
+                            continue
+
+                        title = title_tag.get_text(strip=True)
+                        raw_link = title_tag.get('href', '')
+
+                        # DuckDuckGo ห่อลิงก์จริงไว้ใน redirect param uddg=
+                        parsed = urllib.parse.urlparse(raw_link)
+                        qs = urllib.parse.parse_qs(parsed.query)
+                        real_link = qs.get('uddg', [raw_link])[0]
+
+                        desc = desc_tag.get_text(strip=True) if desc_tag else "ไม่มีคำอธิบายเพิ่มเติม"
+                        results.append(f"**{title}**\n   🔗 {real_link}\n   📄 {desc}")
+
+                        if len(results) >= 3:
+                            break
+
+                    if not results:
+                        return "🔍 ค้นหาสำเร็จ แต่ไม่พบผลลัพธ์ที่เกี่ยวข้อง"
+
+                    lines = [f"{i+1}. {res}" for i, res in enumerate(results)]
                     return "🔍 Search Results:\n" + "\n".join(lines)
-            except Exception as e:
-                if attempt == max_retries - 1:
-                    return f"⚠️ Search failed after {max_retries} attempts. Try rephrasing your question."
-                continue
-        return "⚠️ Could not search the web."
+
+        except asyncio.TimeoutError:
+            return "⚠️ ระบบค้นหาใช้เวลานานเกินไป (Timeout) กรุณาลองใหม่"
+        except Exception as e:
+            logger.error(f"Search failed: {e}")
+            return "⚠️ ระบบค้นหามีปัญหาขัดข้อง กรุณาลองใหม่ครับ"
 
     @commands.command(name="search", aliases=["s"])
     async def search_command(self, ctx: commands.Context, *, query: str):
@@ -112,7 +146,7 @@ class AI(commands.Cog):
             await ctx.send("❌ Please provide a search query after the command.")
             return
         
-        status_msg = await ctx.send("🔍 Searching the web and thinking...")
+        status_msg = await ctx.send("🔍 Searching Google and thinking...")
         
         async with ctx.typing():
             search_result = await self.execute_search(query)
@@ -121,13 +155,12 @@ class AI(commands.Cog):
             await status_msg.edit(content=f"⚠️ {search_result}")
             return
 
-        # ให้ AI สรุปผลการค้นหาเว็บแทนการพ่นลิงก์ดิบ
         history = self.get_channel_history(ctx.channel.id)
         original_user_content = f"[{ctx.author.display_name}]: {query}"
         
         prompt_with_search = (
             f"{original_user_content}\n\n"
-            f"[Latest web search results]\n{search_result}\n"
+            f"[Latest Google search results]\n{search_result}\n"
             "(Please summarize the answer logically based ONLY on the search data above. Do not output raw links unless necessary.)"
         )
         
@@ -136,7 +169,7 @@ class AI(commands.Cog):
         async with ctx.typing():
             reply, _ = await self.generate(self.chat_model, temp_history, num_predict=2048)
 
-        # ล้างคำนำหน้าชื่อบอทที่หลอนติดมา
+        # ลบชื่อบอทที่อาจจะหลอนพิมพ์นำหน้ามา
         bot_name = self.bot.user.name if self.bot.user else ""
         if bot_name and reply.lower().startswith(f"{bot_name.lower()}:"):
             reply = reply[len(bot_name)+1:].strip()
@@ -147,9 +180,15 @@ class AI(commands.Cog):
         elif reply.lower().startswith("[ai]:"):
             reply = reply[5:].strip()
 
-        await status_msg.edit(content=reply)
+        # จัดการข้อความยาวเกิน 2,000 ตัวอักษร
+        if len(reply) > 1950:
+            chunks = [reply[i:i+1950] for i in range(0, len(reply), 1950)]
+            await status_msg.edit(content=chunks[0])
+            for chunk in chunks[1:]:
+                await ctx.send(chunk)
+        else:
+            await status_msg.edit(content=reply)
 
-        # บันทึกประวัติคุยที่สะอาด
         history.append({"role": "user", "content": original_user_content})
         history.append({"role": "assistant", "content": reply[:1500]})
         self._trim_history(ctx.channel.id, history)
@@ -211,31 +250,27 @@ class AI(commands.Cog):
 
         history = self.get_channel_history(ctx.channel.id)
         
-        # 🌟 จุดสำคัญ: ครอบชื่อผู้ใช้ด้วย [ ] เพื่อไม่ให้ AI แปลความหมายแยกชื่อเป็นคำๆ
         original_user_content = f"[{ctx.author.display_name}]: {message}"
         content_for_ai = original_user_content
         
         status_msg = None 
 
-        # 1. เช็คคีย์เวิร์ดค้นหาเว็บ
         needs_search = any(keyword in message.lower() for keyword in SEARCH_TRIGGER_KEYWORDS)
         
         if needs_search:
-            status_msg = await ctx.send("🔍 Searching the web...")
+            status_msg = await ctx.send("🔍 Searching Google...")
             async with ctx.typing():
                 search_result = await self.execute_search(message)
             
             if "Could not search" not in search_result:
                 content_for_ai = (
                     f"{original_user_content}\n\n"
-                    f"[Latest web search results for the question above]\n{search_result}\n"
+                    f"[Latest Google search results for the question above]\n{search_result}\n"
                     "(Please answer based on this search data.)"
                 )
 
-        # 🌟 ส่งให้ AI ด้วยประวัติชั่วคราวที่มีข้อมูลค้นหาเว็บ (ไม่ทำให้ประวัติหลักสกปรก)
         temp_history = history + [{"role": "user", "content": content_for_ai}]
 
-        # 2. ให้ AI สร้างคำตอบ
         async with ctx.typing():
             reply, _ = await self.generate(self.chat_model, temp_history, num_predict=2048)
 
@@ -244,7 +279,6 @@ class AI(commands.Cog):
         if not reply or not reply.strip():
             reply = "⚠️ Sorry, the model took too long processing and didn't return an answer."
 
-        # ลบชื่อบอท/AI หากมันหลอนพิมพ์ติดมาในรูปแบบต่างๆ
         bot_name = self.bot.user.name if self.bot.user else ""
         if bot_name and reply.lower().startswith(f"{bot_name.lower()}:"):
             reply = reply[len(bot_name)+1:].strip()
@@ -259,16 +293,31 @@ class AI(commands.Cog):
         elif reply.lower().startswith(f"[{ctx.me.display_name.lower()}]:"):
             reply = reply[len(ctx.me.display_name)+4:].strip()
 
-        # 3. อัปเดตข้อความบอท
+        # จัดการข้อความยาวเกิน 2,000 ตัวอักษรสำหรับแชทปกติ
         if status_msg is not None:
             try:
-                await status_msg.edit(content=reply)
+                if len(reply) > 1950:
+                    chunks = [reply[i:i+1950] for i in range(0, len(reply), 1950)]
+                    await status_msg.edit(content=chunks[0])
+                    for chunk in chunks[1:]:
+                        await ctx.send(chunk)
+                else:
+                    await status_msg.edit(content=reply)
             except discord.DiscordException:
-                await ctx.send(reply)
+                if len(reply) > 1950:
+                    chunks = [reply[i:i+1950] for i in range(0, len(reply), 1950)]
+                    for chunk in chunks:
+                        await ctx.send(chunk)
+                else:
+                    await ctx.send(reply)
         else:
-            await ctx.send(reply)
+            if len(reply) > 1950:
+                chunks = [reply[i:i+1950] for i in range(0, len(reply), 1950)]
+                for chunk in chunks:
+                    await ctx.send(chunk)
+            else:
+                await ctx.send(reply)
 
-        # บันทึกประวัติคุยที่ไม่มีข้อมูลเว็บรกๆ เข้าสมองบอท
         history.append({"role": "user", "content": original_user_content})
         history.append({"role": "assistant", "content": reply[:1500]})
         self._trim_history(ctx.channel.id, history)
@@ -294,7 +343,6 @@ class AI(commands.Cog):
             history = self.channel_conversations.get(ctx.channel.id, [])
             participants = set()
             
-            # ปรับตัวแกะชื่อในคำสั่ง !learn ให้ดึงชื่อจากระบบวงเล็บเหลี่ยมตัวใหม่
             for msg in history:
                 if msg.get("role") == "system":
                     continue
