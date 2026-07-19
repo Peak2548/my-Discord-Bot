@@ -122,23 +122,40 @@ class Music(commands.Cog):
         'options': '-vn'
     }
 
-    async def extract_audio(self, url: str) -> tuple[str, str]:
-        """Extract audio URL and title from the given URL."""
+    async def extract_audio(self, url: str, retries: int = 2) -> tuple[str, str]:
+        """Extract audio URL and title from the given URL.
+
+        Retries a couple of times because the first extraction after a
+        fresh deploy (or an occasional network hiccup reaching GitHub for
+        the EJS challenge-solver script) can fail transiently even though
+        the very next attempt succeeds once the script is cached locally.
+        """
         loop = asyncio.get_event_loop()
-        try:
-            with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
-                info = await loop.run_in_executor(None, ydl.extract_info, url, False)
-                if 'entries' in info:
-                    info = info['entries'][0]
-                audio_url = info.get('url')
-                title = info.get('title', 'Unknown') or 'Unknown'
-                return audio_url, title
-        except yt_dlp.utils.YoutubeDLError as e:
-            logger.error(f"yt-dlp error: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error in extract_audio: {e}")
-            raise
+        last_error: Exception | None = None
+
+        for attempt in range(1, retries + 1):
+            try:
+                with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
+                    info = await loop.run_in_executor(None, ydl.extract_info, url, False)
+                    if 'entries' in info:
+                        info = info['entries'][0]
+                    audio_url = info.get('url')
+                    title = info.get('title', 'Unknown') or 'Unknown'
+                    if not audio_url:
+                        raise yt_dlp.utils.ExtractorError("No audio URL returned")
+                    return audio_url, title
+            except yt_dlp.utils.YoutubeDLError as e:
+                last_error = e
+                logger.warning(f"yt-dlp extraction attempt {attempt}/{retries} failed: {e}")
+                if attempt < retries:
+                    await asyncio.sleep(1.5)
+            except Exception as e:
+                last_error = e
+                logger.error(f"Unexpected error in extract_audio (attempt {attempt}/{retries}): {e}")
+                if attempt < retries:
+                    await asyncio.sleep(1.5)
+
+        raise last_error
 
     async def play_next(self, ctx: commands.Context):
         """Play the next song in the queue."""
