@@ -8,6 +8,7 @@ import base64
 import io
 import logging
 import os
+import shutil
 import subprocess
 from collections import deque
 from typing import Optional
@@ -35,13 +36,32 @@ logger = logging.getLogger(__name__)
 # exists, so the bot doesn't crash — it just logs a warning.
 RENDER_SECRET_COOKIE_PATH = "/etc/secrets/cookies.txt"
 LOCAL_COOKIE_PATH = "cookies.txt"
+WRITABLE_COOKIE_PATH = "/tmp/cookies.txt"  # yt-dlp needs to be able to write back to this file
 
 
 def get_cookiefile_path() -> Optional[str]:
+    """
+    Resolve a usable, WRITABLE cookiefile path.
+
+    Render's Secret Files (/etc/secrets/*) are mounted read-only, but yt-dlp
+    writes back to the cookiefile it's given (to persist refreshed cookies),
+    so passing the secret path directly causes:
+        [Errno 30] Read-only file system: '/etc/secrets/cookies.txt'
+
+    Fix: copy the secret file into /tmp (writable) once at startup, and hand
+    yt-dlp that copy instead.
+    """
     if os.path.isfile(RENDER_SECRET_COOKIE_PATH):
-        return RENDER_SECRET_COOKIE_PATH
+        try:
+            shutil.copyfile(RENDER_SECRET_COOKIE_PATH, WRITABLE_COOKIE_PATH)
+            return WRITABLE_COOKIE_PATH
+        except Exception as e:
+            logger.error(f"Failed to copy secret cookies file to /tmp: {e}")
+            # Fall through to try other options rather than crashing here.
+
     if os.path.isfile(LOCAL_COOKIE_PATH):
         return LOCAL_COOKIE_PATH
+
     return None
 
 
