@@ -81,18 +81,22 @@ class Music(commands.Cog):
 
         # Build ydl_opts at runtime so we can resolve the cookies path
         # correctly depending on where the bot is running (Render vs local).
+        #
+        # NOTE: player_client is intentionally NOT restricted here. Forcing
+        # it to e.g. ['android', 'ios'] caused problems once a cookiefile
+        # was added, because those clients don't support cookie auth and
+        # get silently skipped — leaving no usable client. Letting yt-dlp
+        # auto-select the client (as it does when running locally) lets it
+        # pick whichever client actually works with the given cookies.
         self.ydl_opts = {
-            'format': 'bestaudio/best',
-            'default_search': 'ytsearch',
-            'quiet': False,
-            'no_warnings': False,
-            'verbose': True,
+            'format': 'bestaudio[ext=m4a]/bestaudio/best',
+            'quiet': True,
             'noplaylist': True,
-            'extractor_args': {
-                'youtube': {
-                    'player_client': ['android', 'ios']
-                }
-            },
+            'nocheckcertificate': True,
+            'ignoreerrors': False,
+            'default_search': 'ytsearch',
+            'source_address': '0.0.0.0',
+            'socket_timeout': 30,
         }
 
         cookiefile = get_cookiefile_path()
@@ -102,7 +106,8 @@ class Music(commands.Cog):
         else:
             logger.warning(
                 "⚠️ No cookies.txt found (checked %s and %s). "
-                "YouTube playback may fail with 'Sign in to confirm you're not a bot'.",
+                "On cloud hosts (e.g. Render) YouTube usually requires cookies "
+                "and playback may fail with 'Sign in to confirm you're not a bot'.",
                 RENDER_SECRET_COOKIE_PATH, LOCAL_COOKIE_PATH,
             )
 
