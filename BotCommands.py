@@ -7,6 +7,7 @@ import asyncio
 import base64
 import io
 import logging
+import os
 import subprocess
 from collections import deque
 from typing import Optional
@@ -20,6 +21,30 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+# --------------------------------------------------------------------------
+# Cookie file resolution
+# --------------------------------------------------------------------------
+# Render "Secret Files" are always mounted at /etc/secrets/<filename>, NOT in
+# the app's working directory (/app). The old code hardcoded a relative
+# 'cookies.txt', which only worked locally on Windows and silently pointed
+# nowhere on Render, so yt-dlp ran with no cookies at all -> YouTube blocked
+# it with "Sign in to confirm you're not a bot".
+#
+# This checks the Render secret path first, then falls back to a local file
+# (for running on your own PC), and finally to None (no cookies) if neither
+# exists, so the bot doesn't crash — it just logs a warning.
+RENDER_SECRET_COOKIE_PATH = "/etc/secrets/cookies.txt"
+LOCAL_COOKIE_PATH = "cookies.txt"
+
+
+def get_cookiefile_path() -> Optional[str]:
+    if os.path.isfile(RENDER_SECRET_COOKIE_PATH):
+        return RENDER_SECRET_COOKIE_PATH
+    if os.path.isfile(LOCAL_COOKIE_PATH):
+        return LOCAL_COOKIE_PATH
+    return None
+
+
 # ==========================================================================
 # Music cog
 # ==========================================================================
@@ -27,35 +52,44 @@ logger = logging.getLogger(__name__)
 class Music(commands.Cog):
     """Music player cog for Discord with beautiful Embeds."""
 
-    ydl_opts: dict = {
-        'cookiefile': 'cookies.txt',
-        'format': 'bestaudio[ext=m4a]/bestaudio/best',
-        'quiet': True,
-        'noplaylist': True,
-        'nocheckcertificate': True,
-        'ignoreerrors': False,
-        'default_search': 'ytsearch',
-        'source_address': '0.0.0.0',
-        'socket_timeout': 30,
-        'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-us,en;q=0.5',
-        'Sec-Fetch-Mode': 'navigate',
-        }
-    }
-
-    ffmpeg_opts: dict = {
-        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
-        'options': '-vn'
-    }
-
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.is_loading = False
         self.queue: deque = deque()
         self.is_playing = False
         self._connecting = False
+
+        # Build ydl_opts at runtime so we can resolve the cookies path
+        # correctly depending on where the bot is running (Render vs local).
+        self.ydl_opts = {
+            'format': 'bestaudio/best',
+            'default_search': 'ytsearch',
+            'quiet': False,
+            'no_warnings': False,
+            'verbose': True,
+            'noplaylist': True,
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['android', 'ios']
+                }
+            },
+        }
+
+        cookiefile = get_cookiefile_path()
+        if cookiefile:
+            self.ydl_opts['cookiefile'] = cookiefile
+            logger.info(f"✅ Using YouTube cookies from: {cookiefile}")
+        else:
+            logger.warning(
+                "⚠️ No cookies.txt found (checked %s and %s). "
+                "YouTube playback may fail with 'Sign in to confirm you're not a bot'.",
+                RENDER_SECRET_COOKIE_PATH, LOCAL_COOKIE_PATH,
+            )
+
+    ffmpeg_opts: dict = {
+        'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+        'options': '-vn'
+    }
 
     async def extract_audio(self, url: str) -> tuple[str, str]:
         """Extract audio URL and title from the given URL."""
@@ -99,7 +133,7 @@ class Music(commands.Cog):
 
         source = discord.FFmpegOpusAudio(audio_url, **self.ffmpeg_opts)
         voice_client.play(source, after=after_playing)
-        
+
         # UI Upgrade: ตอนเล่นเพลงถัดไปใช้ Embed สวยงาม
         embed = discord.Embed(title="🎵 Now Playing", description=f"**[{title}]({audio_url})**", color=discord.Color.blurple())
         if ctx.author.avatar:
@@ -146,9 +180,13 @@ class Music(commands.Cog):
             self._connecting = False
 
     def cleanup_ffmpeg(self) -> None:
-        """Force-kill any lingering ffmpeg.exe process after stopping playback."""
+        """Force-kill any lingering ffmpeg process after stopping playback (cross-platform)."""
         try:
-            subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe'], capture_output=True)
+            if os.name == "nt":
+                subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe'], capture_output=True)
+            else:
+                # Linux (e.g. Render) doesn't have taskkill/ffmpeg.exe
+                subprocess.run(['pkill', '-f', 'ffmpeg'], capture_output=True)
         except Exception as e:
             logger.warning(f"Non-fatal error while cleaning up ffmpeg: {e}")
 
@@ -233,7 +271,7 @@ class Music(commands.Cog):
 
                 source = discord.FFmpegOpusAudio(audio_url, **self.ffmpeg_opts)
                 voice_client.play(source, after=after_playing)
-                
+
                 # UI Upgrade: Embed สำหรับเพลงปัจจุบัน
                 embed = discord.Embed(title="🎵 Now Playing", description=f"**[{title}]({url})**", color=discord.Color.green())
                 if ctx.author.avatar:
@@ -242,7 +280,7 @@ class Music(commands.Cog):
                 await ctx.send(embed=embed)
             else:
                 self.queue.append((audio_url, title))
-                
+
                 # UI Upgrade: Embed สำหรับตอนเพิ่มเข้าคิว
                 embed = discord.Embed(title="📝 Added to Queue", description=f"**{title}**", color=discord.Color.orange())
                 embed.add_field(name="Position in Queue", value=f"`#{len(self.queue)}`", inline=True)
@@ -340,7 +378,7 @@ class ImageGen(commands.Cog):
     async def generate_image(self, ctx: commands.Context, *, prompt: str):
         """Generate an image from a text prompt via SD WebUI."""
         status_msg = await ctx.send(f"🎨 **Generating your masterpiece...**\n> *Prompt:* `{prompt}`")
-        
+
         payload = {
             "prompt": prompt,
             "width": 512,
@@ -352,32 +390,32 @@ class ImageGen(commands.Cog):
         }
 
         try:
-            # 🌟 ปรับปรุง: เปลี่ยนเป็น Async aiohttp แท้ๆ ไม่บล็อกการทำงานบอทแน่นอน 
+            # 🌟 ปรับปรุง: เปลี่ยนเป็น Async aiohttp แท้ๆ ไม่บล็อกการทำงานบอทแน่นอน
             async with aiohttp.ClientSession() as session:
                 timeout = aiohttp.ClientTimeout(total=SD_REQUEST_TIMEOUT_SECONDS)
                 async with session.post(SD_TXT2IMG_URL, json=payload, timeout=timeout) as resp:
                     if resp.status != 200:
                         await status_msg.edit(content=f"❌ SD API returned error status: `{resp.status}`")
                         return
-                    
+
                     data = await resp.json()
 
             # แปลงภาพจาก base64
             image_bytes = base64.b64decode(data["images"][0])
             buffer = io.BytesIO(image_bytes)
             buffer.seek(0)
-            
+
             # 🌟 UI Upgrade: ส่งภาพแบบกล่องพรีเมียม ฝังภาพลงใน Embed
             embed = discord.Embed(
-                title="✨ Dream Generated", 
-                description=f"**Prompt:** {prompt}", 
+                title="✨ Dream Generated",
+                description=f"**Prompt:** {prompt}",
                 color=discord.Color.purple()
             )
             file = discord.File(fp=buffer, filename="generated_art.png")
             embed.set_image(url="attachment://generated_art.png")
             if ctx.author.avatar:
                 embed.set_footer(text=f"Artisan: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
-            
+
             await status_msg.delete()
             await ctx.send(file=file, embed=embed)
 

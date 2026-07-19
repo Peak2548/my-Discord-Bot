@@ -5,13 +5,25 @@ from dotenv import load_dotenv
 import asyncio
 import logging
 import sys
+import shutil
 import aiohttp
-
-# Configure yt-dlp to use deno for JavaScript extraction
-os.environ['EJS'] = r'C:\Users\Peako\.deno\bin\deno.exe'
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+# --------------------------------------------------------------------------
+# Configure yt-dlp to use deno for JavaScript extraction (if available)
+# --------------------------------------------------------------------------
+# เดิม: hardcode path Windows (C:\Users\Peako\.deno\bin\deno.exe)
+# ปัญหา: path นี้ไม่มีอยู่จริงบน Linux container (เช่น Render) เลยไม่มี JS runtime
+# แก้ไข: หา deno แบบ dynamic ด้วย shutil.which() ถ้าไม่เจอก็ข้ามไปเฉยๆ
+_deno_path = shutil.which('deno') or r'C:\Users\Peako\.deno\bin\deno.exe'
+if shutil.which('deno') or os.path.isfile(_deno_path):
+    os.environ['EJS'] = _deno_path
+    logger.info(f"Using deno JS runtime at: {_deno_path}")
+else:
+    logger.warning("deno not found on this system — yt-dlp will run without a JS runtime "
+                    "(some YouTube formats may be missing)")
 
 load_dotenv()
 TOKEN = os.getenv('TOKEN')
@@ -55,13 +67,21 @@ async def main():
 # Cleanup on exit
 import atexit
 
+
 def cleanup_on_exit():
     import subprocess
     try:
-        subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe'],
-                      capture_output=True, create_no_window=True)
+        # create_no_window is a Windows-only kwarg; guard it so this doesn't
+        # crash on Linux (e.g. Render) where ffmpeg.exe/taskkill don't exist anyway.
+        kwargs = {"capture_output": True}
+        if os.name == "nt":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+            subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe'], **kwargs)
+        else:
+            subprocess.run(['pkill', '-f', 'ffmpeg'], **kwargs)
     except Exception:
         pass
+
 
 atexit.register(cleanup_on_exit)
 
