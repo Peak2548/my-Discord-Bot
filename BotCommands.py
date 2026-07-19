@@ -29,14 +29,15 @@ class Music(commands.Cog):
 
     ydl_opts = {
     'format': 'bestaudio/best',
-    'cookiefile': 'cookies.txt',  # ไฟล์คุกกี้ที่ต้องการเช็ค
+    'cookiefile': 'cookies.txt',
+    'default_search': 'ytsearch',  # 🚨 เติมบรรทัดนี้กลับเข้าไป (ถ้าอยากให้ค้นหาบน YouTube)
     
-    # --- 🚨 แก้ 3 บรรทัดนี้ชั่วคราวเพื่อเช็คสถานะ ---
-    'quiet': False,        # เปลี่ยนจาก True เป็น False เพื่อเปิด Log
-    'no_warnings': False,  # เปิดแจ้งเตือน
-    'verbose': True,       # สำคัญที่สุด! ตัวนี้จะบอกประวัติการโหลดทั้งหมด
-    
+    # เปิดโหมดดูล็อกละเอียด (ที่คุณทำไว้ ดีมากครับ)
+    'quiet': False,
+    'no_warnings': False,
+    'verbose': True,
     'noplaylist': True,
+    
     'extractor_args': {
         'youtube': {
             'player_client': ['android', 'ios']
