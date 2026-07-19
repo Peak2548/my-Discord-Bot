@@ -6,3 +6,4 @@ requests==2.34.2
 yt-dlp==2026.7.4
 Pillow==12.3.0
 davey==0.1.6
+beautifulsoup4
