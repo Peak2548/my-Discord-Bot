@@ -28,6 +28,7 @@ class Music(commands.Cog):
     """Music player cog for Discord with beautiful Embeds."""
 
     ydl_opts: dict = {
+        'cookiefile': 'cookies.txt',
         'format': 'bestaudio[ext=m4a]/bestaudio/best',
         'quiet': True,
         'noplaylist': True,

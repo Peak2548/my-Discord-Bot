@@ -68,3 +68,6 @@ ffmpeg.exe
 tmp/
 temp/
 *.tmp
+
+
+cookies.txt
