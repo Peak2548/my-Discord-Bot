@@ -27,23 +27,22 @@ logger = logging.getLogger(__name__)
 class Music(commands.Cog):
     """Music player cog for Discord with beautiful Embeds."""
 
-    ydl_opts: dict = {
-        'cookiefile': 'cookies.txt',
-        'format': 'bestaudio[ext=m4a]/bestaudio/best',
-        'quiet': True,
-        'noplaylist': True,
-        'nocheckcertificate': True,
-        'ignoreerrors': False,
-        'default_search': 'ytsearch',
-        'source_address': '0.0.0.0',
-        'socket_timeout': 30,
-        'http_headers': {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-us,en;q=0.5',
-        'Sec-Fetch-Mode': 'navigate',
+    ydl_opts = {
+    'format': 'bestaudio/best',
+    'cookiefile': 'cookies.txt',  # ไฟล์คุกกี้ที่ต้องการเช็ค
+    
+    # --- 🚨 แก้ 3 บรรทัดนี้ชั่วคราวเพื่อเช็คสถานะ ---
+    'quiet': False,        # เปลี่ยนจาก True เป็น False เพื่อเปิด Log
+    'no_warnings': False,  # เปิดแจ้งเตือน
+    'verbose': True,       # สำคัญที่สุด! ตัวนี้จะบอกประวัติการโหลดทั้งหมด
+    
+    'noplaylist': True,
+    'extractor_args': {
+        'youtube': {
+            'player_client': ['android', 'ios']
         }
     }
+}
 
     ffmpeg_opts: dict = {
         'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
