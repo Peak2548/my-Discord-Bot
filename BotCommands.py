@@ -97,6 +97,12 @@ class Music(commands.Cog):
             'default_search': 'ytsearch',
             'source_address': '0.0.0.0',
             'socket_timeout': 30,
+            # Having the deno binary installed isn't enough on its own —
+            # yt-dlp also needs permission to download the actual EJS
+            # (Extractor JS) challenge-solver script that runs on deno to
+            # decrypt YouTube's signature/n-challenge. Without this, deno
+            # sits unused and only image formats are returned.
+            'remote_components': ['ejs:github'],
         }
 
         cookiefile = get_cookiefile_path()
