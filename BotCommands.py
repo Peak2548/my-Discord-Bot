@@ -55,8 +55,8 @@ class Music(commands.Cog):
         # ffmpeg processes from other programs like OBS/video editors).
         self.current_source: Optional[discord.FFmpegOpusAudio] = None
 
-    async def extract_audio(self, url: str, retries: int = 2) -> tuple[str, str]:
-        """Extract audio URL and title from the given URL.
+    async def extract_audio(self, url: str, retries: int = 2) -> tuple[str, str, str]:
+        """Extract audio URL, title, and the canonical video webpage URL.
 
         Retries once on transient failures (occasional yt-dlp/network
         hiccups) before giving up.
@@ -72,9 +72,13 @@ class Music(commands.Cog):
                         info = info['entries'][0]
                     audio_url = info.get('url')
                     title = info.get('title', 'Unknown') or 'Unknown'
+                    # webpage_url is the actual youtube.com/watch?v=... page —
+                    # this is what should be clicked, not the raw search
+                    # text or the temporary signed audio stream URL.
+                    webpage_url = info.get('webpage_url') or info.get('original_url') or url
                     if not audio_url:
                         raise yt_dlp.utils.ExtractorError("No audio URL returned")
-                    return audio_url, title
+                    return audio_url, title, webpage_url
             except yt_dlp.utils.YoutubeDLError as e:
                 last_error = e
                 logger.warning(f"yt-dlp extraction attempt {attempt}/{retries} failed: {e}")
@@ -101,7 +105,7 @@ class Music(commands.Cog):
             self.is_playing = False
             return
 
-        audio_url, title = self.queue.popleft()
+        audio_url, title, webpage_url = self.queue.popleft()
         voice_client = ctx.voice_client
 
         def after_playing(error):
@@ -114,8 +118,9 @@ class Music(commands.Cog):
         self.current_source = source
         voice_client.play(source, after=after_playing)
 
-        # UI Upgrade: ตอนเล่นเพลงถัดไปใช้ Embed สวยงาม
-        embed = discord.Embed(title="🎵 Now Playing", description=f"**[{title}]({audio_url})**", color=discord.Color.blurple())
+        # UI Upgrade: ตอนเล่นเพลงถัดไปใช้ Embed สวยงาม — ลิงก์ไปที่วิดีโอ
+        # YouTube จริง ไม่ใช่ลิงก์สตรีมเสียงชั่วคราวที่หมดอายุ/กดดูไม่ได้
+        embed = discord.Embed(title="🎵 Now Playing", description=f"**[{title}]({webpage_url})**", color=discord.Color.blurple())
         if ctx.author.avatar:
             embed.set_footer(text=f"Requested by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
@@ -255,7 +260,7 @@ class Music(commands.Cog):
                     video_id = url.split('v=')[1].split('&')[0]
                     url = f"https://www.youtube.com/watch?v={video_id}"
 
-            audio_url, title = await self.extract_audio(url)
+            audio_url, title, webpage_url = await self.extract_audio(url)
             if not audio_url:
                 await loading_msg.edit(content="❌ Could not find audio URL")
                 return
@@ -271,14 +276,15 @@ class Music(commands.Cog):
                 self.current_source = source
                 voice_client.play(source, after=after_playing)
 
-                # UI Upgrade: Embed สำหรับเพลงปัจจุบัน
-                embed = discord.Embed(title="🎵 Now Playing", description=f"**[{title}]({url})**", color=discord.Color.green())
+                # UI Upgrade: Embed สำหรับเพลงปัจจุบัน — ลิงก์ไปที่วิดีโอ
+                # YouTube จริง (webpage_url) ไม่ใช่ข้อความค้นหาดิบๆ ที่กดไม่ได้
+                embed = discord.Embed(title="🎵 Now Playing", description=f"**[{title}]({webpage_url})**", color=discord.Color.green())
                 if ctx.author.avatar:
                     embed.set_footer(text=f"Requested by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
                 await loading_msg.delete()
                 await ctx.send(embed=embed)
             else:
-                self.queue.append((audio_url, title))
+                self.queue.append((audio_url, title, webpage_url))
 
                 # UI Upgrade: Embed สำหรับตอนเพิ่มเข้าคิว
                 embed = discord.Embed(title="📝 Added to Queue", description=f"**{title}**", color=discord.Color.orange())
@@ -302,7 +308,7 @@ class Music(commands.Cog):
             await ctx.send(embed=embed)
             return
 
-        queue_list = "\n".join(f"`{i + 1}.` {title}" for i, (_, title) in enumerate(self.queue))
+        queue_list = "\n".join(f"`{i + 1}.` {title}" for i, (_, title, _) in enumerate(self.queue))
         embed = discord.Embed(title="🎵 Current Music Queue", description=queue_list, color=discord.Color.blue())
         embed.set_footer(text=f"Total Songs: {len(self.queue)} | Requested by {ctx.author.display_name}")
         await ctx.send(embed=embed)
