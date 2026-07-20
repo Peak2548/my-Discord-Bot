@@ -49,24 +49,44 @@ class Music(commands.Cog):
         self.queue: deque = deque()
         self.is_playing = False
         self._connecting = False
+        # Track the audio source currently in use so we can kill *only* the
+        # ffmpeg process the bot itself spawned, instead of nuking every
+        # ffmpeg.exe on the machine (which used to also kill unrelated
+        # ffmpeg processes from other programs like OBS/video editors).
+        self.current_source: Optional[discord.FFmpegOpusAudio] = None
 
-    async def extract_audio(self, url: str) -> tuple[str, str]:
-        """Extract audio URL and title from the given URL."""
+    async def extract_audio(self, url: str, retries: int = 2) -> tuple[str, str]:
+        """Extract audio URL and title from the given URL.
+
+        Retries once on transient failures (occasional yt-dlp/network
+        hiccups) before giving up.
+        """
         loop = asyncio.get_event_loop()
-        try:
-            with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
-                info = await loop.run_in_executor(None, ydl.extract_info, url, False)
-                if 'entries' in info:
-                    info = info['entries'][0]
-                audio_url = info.get('url')
-                title = info.get('title', 'Unknown') or 'Unknown'
-                return audio_url, title
-        except yt_dlp.utils.YoutubeDLError as e:
-            logger.error(f"yt-dlp error: {e}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error in extract_audio: {e}")
-            raise
+        last_error: Exception | None = None
+
+        for attempt in range(1, retries + 1):
+            try:
+                with yt_dlp.YoutubeDL(self.ydl_opts) as ydl:
+                    info = await loop.run_in_executor(None, ydl.extract_info, url, False)
+                    if 'entries' in info:
+                        info = info['entries'][0]
+                    audio_url = info.get('url')
+                    title = info.get('title', 'Unknown') or 'Unknown'
+                    if not audio_url:
+                        raise yt_dlp.utils.ExtractorError("No audio URL returned")
+                    return audio_url, title
+            except yt_dlp.utils.YoutubeDLError as e:
+                last_error = e
+                logger.warning(f"yt-dlp extraction attempt {attempt}/{retries} failed: {e}")
+                if attempt < retries:
+                    await asyncio.sleep(1.5)
+            except Exception as e:
+                last_error = e
+                logger.error(f"Unexpected error in extract_audio (attempt {attempt}/{retries}): {e}")
+                if attempt < retries:
+                    await asyncio.sleep(1.5)
+
+        raise last_error
 
     async def play_next(self, ctx: commands.Context):
         """Play the next song in the queue."""
@@ -91,8 +111,9 @@ class Music(commands.Cog):
                 asyncio.run_coroutine_threadsafe(self.play_next(ctx), self.bot.loop)
 
         source = discord.FFmpegOpusAudio(audio_url, **self.ffmpeg_opts)
+        self.current_source = source
         voice_client.play(source, after=after_playing)
-        
+
         # UI Upgrade: ตอนเล่นเพลงถัดไปใช้ Embed สวยงาม
         embed = discord.Embed(title="🎵 Now Playing", description=f"**[{title}]({audio_url})**", color=discord.Color.blurple())
         if ctx.author.avatar:
@@ -139,11 +160,33 @@ class Music(commands.Cog):
             self._connecting = False
 
     def cleanup_ffmpeg(self) -> None:
-        """Force-kill any lingering ffmpeg.exe process after stopping playback."""
+        """Kill only the ffmpeg process this bot spawned (if any lingers),
+        instead of every ffmpeg.exe on the machine.
+
+        Previously this ran `taskkill /F /IM ffmpeg.exe`, which kills ALL
+        ffmpeg processes system-wide — including ones from unrelated
+        programs (OBS, video editors, other scripts) that happened to be
+        running at the same time. discord.py's FFmpegOpusAudio already
+        terminates its own subprocess via .cleanup() when playback stops,
+        so this is now just a targeted fallback in case that process is
+        somehow still alive.
+        """
+        source = self.current_source
+        self.current_source = None
+        if source is None:
+            return
+
+        process = getattr(source, "_process", None)
+        if process is None:
+            return
+
         try:
-            subprocess.run(['taskkill', '/F', '/IM', 'ffmpeg.exe'], capture_output=True)
+            if process.poll() is None:  # still running
+                process.kill()
+                process.wait(timeout=5)
+                logger.info(f"Killed lingering ffmpeg process (pid={process.pid})")
         except Exception as e:
-            logger.warning(f"Non-fatal error while cleaning up ffmpeg: {e}")
+            logger.warning(f"Non-fatal error while cleaning up ffmpeg process: {e}")
 
     @commands.command(name="join", aliases=["j"])
     async def join(self, ctx: commands.Context):
@@ -225,8 +268,9 @@ class Music(commands.Cog):
                         asyncio.run_coroutine_threadsafe(self.play_next(ctx), self.bot.loop)
 
                 source = discord.FFmpegOpusAudio(audio_url, **self.ffmpeg_opts)
+                self.current_source = source
                 voice_client.play(source, after=after_playing)
-                
+
                 # UI Upgrade: Embed สำหรับเพลงปัจจุบัน
                 embed = discord.Embed(title="🎵 Now Playing", description=f"**[{title}]({url})**", color=discord.Color.green())
                 if ctx.author.avatar:
@@ -235,7 +279,7 @@ class Music(commands.Cog):
                 await ctx.send(embed=embed)
             else:
                 self.queue.append((audio_url, title))
-                
+
                 # UI Upgrade: Embed สำหรับตอนเพิ่มเข้าคิว
                 embed = discord.Embed(title="📝 Added to Queue", description=f"**{title}**", color=discord.Color.orange())
                 embed.add_field(name="Position in Queue", value=f"`#{len(self.queue)}`", inline=True)
@@ -272,7 +316,7 @@ class Music(commands.Cog):
         else:
             await ctx.send("❌ Nothing is currently playing!")
 
-    @commands.command(name="stop", aliases=["st"])
+    @commands.command(name="stop", aliases=["st", "dc"])
     async def stop(self, ctx: commands.Context):
         """Stop and disconnect from voice channel."""
         if not ctx.voice_client:
@@ -333,7 +377,7 @@ class ImageGen(commands.Cog):
     async def generate_image(self, ctx: commands.Context, *, prompt: str):
         """Generate an image from a text prompt via SD WebUI."""
         status_msg = await ctx.send(f"🎨 **Generating your masterpiece...**\n> *Prompt:* `{prompt}`")
-        
+
         payload = {
             "prompt": prompt,
             "width": 512,
@@ -345,32 +389,32 @@ class ImageGen(commands.Cog):
         }
 
         try:
-            # 🌟 ปรับปรุง: เปลี่ยนเป็น Async aiohttp แท้ๆ ไม่บล็อกการทำงานบอทแน่นอน 
+            # 🌟 ปรับปรุง: เปลี่ยนเป็น Async aiohttp แท้ๆ ไม่บล็อกการทำงานบอทแน่นอน
             async with aiohttp.ClientSession() as session:
                 timeout = aiohttp.ClientTimeout(total=SD_REQUEST_TIMEOUT_SECONDS)
                 async with session.post(SD_TXT2IMG_URL, json=payload, timeout=timeout) as resp:
                     if resp.status != 200:
                         await status_msg.edit(content=f"❌ SD API returned error status: `{resp.status}`")
                         return
-                    
+
                     data = await resp.json()
 
             # แปลงภาพจาก base64
             image_bytes = base64.b64decode(data["images"][0])
             buffer = io.BytesIO(image_bytes)
             buffer.seek(0)
-            
+
             # 🌟 UI Upgrade: ส่งภาพแบบกล่องพรีเมียม ฝังภาพลงใน Embed
             embed = discord.Embed(
-                title="✨ Dream Generated", 
-                description=f"**Prompt:** {prompt}", 
+                title="✨ Dream Generated",
+                description=f"**Prompt:** {prompt}",
                 color=discord.Color.purple()
             )
             file = discord.File(fp=buffer, filename="generated_art.png")
             embed.set_image(url="attachment://generated_art.png")
             if ctx.author.avatar:
                 embed.set_footer(text=f"Artisan: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
-            
+
             await status_msg.delete()
             await ctx.send(file=file, embed=embed)
 
