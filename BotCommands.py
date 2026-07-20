@@ -313,7 +313,7 @@ class Music(commands.Cog):
         embed.set_footer(text=f"Total Songs: {len(self.queue)} | Requested by {ctx.author.display_name}")
         await ctx.send(embed=embed)
 
-    @commands.command(name="skip", aliases=["s"])
+    @commands.command(name="skip", aliases=["sk"])
     async def skip(self, ctx: commands.Context):
         """Skip the current song."""
         if ctx.voice_client and ctx.voice_client.is_playing():
@@ -322,7 +322,7 @@ class Music(commands.Cog):
         else:
             await ctx.send("❌ Nothing is currently playing!")
 
-    @commands.command(name="disconnect", aliases=["dc"])
+    @commands.command(name="disconn", aliases=["dc"])
     async def stop(self, ctx: commands.Context):
         """Stop and disconnect from voice channel."""
         if not ctx.voice_client:
