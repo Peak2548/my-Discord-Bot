@@ -1,6 +1,6 @@
 # my-Discord-Bot 🤖
 
-A powerful Discord bot with AI chat, music player, image generation, and web search capabilities. Powered by LM Studio and Stable Diffusion.
+A powerful Discord bot with AI chat, music player, image generation, and web search capabilities. This branch uses **PO Token** for YouTube audio extraction.
 
 ---
 
@@ -8,7 +8,7 @@ A powerful Discord bot with AI chat, music player, image generation, and web sea
 
 - **🧠 AI Chat** - Conversational AI with shared group chat memory
 - **🔍 Web Search** - Automatic web search for relevant queries
-- **🎵 Music Player** - Play music from URLs (YouTube, Spotify, etc.)
+- **🎵 Music Player** - Play music from URLs using PO Token (YouTube, Spotify, etc.)
 - **🖼️ Image Generation** - Generate images via Stable Diffusion
 - **💬 Code Generator** - Get code snippets for various tasks
 - **📝 Text Summarization** - Summarize long texts
@@ -22,7 +22,7 @@ A powerful Discord bot with AI chat, music player, image generation, and web sea
 # Create virtual environment
 python -m venv venv
 
-# Activate it
+# Activate it (Windows)
 .\venv\Scripts\activate
 
 # Install dependencies
@@ -118,6 +118,7 @@ Default checkpoint: `"sd-v1-4.ckpt"` (must exist or set to empty string/your che
 - **MainBot.py**: Entry point, environment loading, DNS resolver fix
 - **BotCommands.py**: Music player, AI chat, image generation cogs
 - **AI.py**: Main AI cog implementation with shared group chat memory
+- **Music.py**: PO Token-based music extraction (this branch)
 
 ### AI Cog Details
 
@@ -154,4 +155,6 @@ Bot has built-in retry logic (3 attempts). If still failing:
 
 ---
 
+## 📄 License
 
+MIT
