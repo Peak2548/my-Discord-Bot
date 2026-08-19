@@ -45,6 +45,7 @@ echo "TOKEN=your-discord-bot-token-here" > .env
 - **FFmpeg**: For music playback (install from [ffmpeg.org](https://ffmpeg.org/download.html))
 - **LM Studio**: Running on port 1234 with a model loaded
 - **Stable Diffusion WebUI**: Running on port 7860 (for image generation)
+- **Node.js**: Required for PO Token music extraction (see below)
 
 ### Dependencies
 
@@ -56,6 +57,34 @@ pip install -r requirements.txt
 ```bash
 pip install audioop-linalg
 ```
+
+### PO Token Music Provider Setup
+
+The bot uses `bgutil-ytdlp-pot-provider` for YouTube audio extraction. This directory is excluded from git tracking and must be set up manually.
+
+**Setup Steps:**
+
+```bash
+# 1. Install Node.js LTS from nodejs.org, then verify:
+node -v
+
+# 2. Get and build the provider server:
+git clone https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git
+cd bgutil-ytdlp-pot-provider/server
+npm ci
+npx tsc
+
+# 3. Start it (leave this terminal open/running):
+node build/main.js
+
+# 4. In a separate terminal, in your bot's venv:
+pip install -U bgutil-ytdlp-pot-provider
+
+# 5. Test it fixed things:
+yt-dlp -f 140 "https://www.youtube.com/watch?v=Mqps4anhz0Q" -o test.m4a
+```
+
+The provider server must be running before starting the bot.
 
 ---
 
