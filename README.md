@@ -76,12 +76,6 @@ npx tsc
 
 # 3. Start it (leave this terminal open/running):
 node build/main.js
-
-# 4. In a separate terminal, in your bot's venv:
-pip install -U bgutil-ytdlp-pot-provider
-
-# 5. Test it fixed things:
-yt-dlp -f 140 "https://www.youtube.com/watch?v=Mqps4anhz0Q" -o test.m4a
 ```
 
 The provider server must be running before starting the bot.
