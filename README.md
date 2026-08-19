@@ -74,8 +74,6 @@ cd bgutil-ytdlp-pot-provider/server
 npm ci
 npx tsc
 
-# 3. Start it (leave this terminal open/running):
-node build/main.js
 ```
 
 The provider server must be running before starting the bot.
