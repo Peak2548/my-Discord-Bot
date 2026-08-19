@@ -68,3 +68,10 @@ ffmpeg.exe
 tmp/
 temp/
 *.tmp
+
+
+cookies.txt
+ffmpeg_error.log
+
+# Embedded git repos (submodules added separately)
+bgutil-ytdlp-pot-provider/

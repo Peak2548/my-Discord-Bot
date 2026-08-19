@@ -10,6 +10,7 @@ beautifulsoup4
 # --- Music (BotCommands.py: !play) ---
 yt-dlp
 yt-dlp-ejs
+bgutil-ytdlp-pot-provider
 
 # --- Image generation (BotCommands.py: !image) ---
 Pillow
