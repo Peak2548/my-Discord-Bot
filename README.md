@@ -76,6 +76,20 @@ npx tsc
 
 ```
 
+### cookies.txt Setup
+
+The PO Token provider requires a `cookies.txt` file from your YouTube account.
+
+**How to export cookies:**
+
+1. Open YouTube in your browser while logged in
+2. Install a browser extension like [Get cookies.txt LOCALLY](https://chrome.google.com/webstore/detail/get-cookies-txt-locally/get-cjfhcgibmjhefjfhgceijgnaoklhafpi) (Chrome) or similar (Firefox/Edge)
+3. Go to `https://www.youtube.com`
+4. Export cookies using the extension
+5. Save the exported `cookies.txt` file in the bot's root directory (same folder as this README)
+
+The provider will use these cookies to access YouTube and extract audio tokens.
+
 The provider server must be running before starting the bot.
 
 ---
