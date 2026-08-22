@@ -1,28 +1,13 @@
-"""
-Discord bot cogs: music playback and Stable Diffusion image generation.
-Optimized with beautiful Embeds, async HTTP clients, and clean UX.
-"""
-
 import asyncio
-import base64
-import io
 import logging
-import subprocess
 from collections import deque
 from typing import Optional
 
-import aiohttp
 import discord
 import yt_dlp
 from discord.ext import commands
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
-
-
-# ==========================================================================
-# Music cog
-# ==========================================================================
 
 class Music(commands.Cog):
     """Music player cog for Discord with beautiful Embeds."""
@@ -49,18 +34,9 @@ class Music(commands.Cog):
         self.queue: deque = deque()
         self.is_playing = False
         self._connecting = False
-        # Track the audio source currently in use so we can kill *only* the
-        # ffmpeg process the bot itself spawned, instead of nuking every
-        # ffmpeg.exe on the machine (which used to also kill unrelated
-        # ffmpeg processes from other programs like OBS/video editors).
         self.current_source: Optional[discord.FFmpegOpusAudio] = None
 
     async def extract_audio(self, url: str, retries: int = 2) -> tuple[str, str, str]:
-        """Extract audio URL, title, and the canonical video webpage URL.
-
-        Retries once on transient failures (occasional yt-dlp/network
-        hiccups) before giving up.
-        """
         loop = asyncio.get_event_loop()
         last_error: Exception | None = None
 
@@ -72,9 +48,6 @@ class Music(commands.Cog):
                         info = info['entries'][0]
                     audio_url = info.get('url')
                     title = info.get('title', 'Unknown') or 'Unknown'
-                    # webpage_url is the actual youtube.com/watch?v=... page —
-                    # this is what should be clicked, not the raw search
-                    # text or the temporary signed audio stream URL.
                     webpage_url = info.get('webpage_url') or info.get('original_url') or url
                     if not audio_url:
                         raise yt_dlp.utils.ExtractorError("No audio URL returned")
@@ -93,7 +66,6 @@ class Music(commands.Cog):
         raise last_error
 
     async def play_next(self, ctx: commands.Context):
-        """Play the next song in the queue."""
         if not self.queue:
             self.is_playing = False
             embed = discord.Embed(description="✅ **Queue finished!** No more songs to play.", color=discord.Color.green())
@@ -118,22 +90,18 @@ class Music(commands.Cog):
         self.current_source = source
         voice_client.play(source, after=after_playing)
 
-        # UI Upgrade: ตอนเล่นเพลงถัดไปใช้ Embed สวยงาม — ลิงก์ไปที่วิดีโอ
-        # YouTube จริง ไม่ใช่ลิงก์สตรีมเสียงชั่วคราวที่หมดอายุ/กดดูไม่ได้
         embed = discord.Embed(title="🎵 Now Playing", description=f"**[{title}]({webpage_url})**", color=discord.Color.blurple())
         if ctx.author.avatar:
             embed.set_footer(text=f"Requested by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
 
     async def safe_connect(self, channel: discord.VoiceChannel) -> Optional[discord.VoiceClient]:
-        """Connect to a voice channel with retry logic."""
         if self._connecting:
             return None
         self._connecting = True
         try:
             existing = channel.guild.voice_client
             if existing is not None:
-                logger.info(f"Cleaning up stale voice client in {existing.channel}")
                 try:
                     await existing.disconnect(force=True)
                 except Exception:
@@ -143,14 +111,12 @@ class Music(commands.Cog):
             last_error = None
             for attempt in range(1, 4):
                 try:
-                    logger.info(f"Voice connect attempt {attempt}/3...")
-                    vc = await channel.connect(timeout=15.0, reconnect=False, self_deaf=True)
-                    await asyncio.sleep(0.5)
-                    logger.info(f"✅ Connected on attempt {attempt}")
+                    # 🌟 แก้ไขตรงนี้: เพิ่ม timeout เป็น 20.0 และเปลี่ยน reconnect เป็น True
+                    vc = await channel.connect(timeout=20.0, reconnect=True, self_deaf=True)
+                    await asyncio.sleep(1) # เพิ่มเวลาพักให้ Handshake เสร็จสมบูรณ์
                     return vc
                 except Exception as e:
                     last_error = e
-                    logger.error(f"Attempt {attempt} failed: {e}")
                     if attempt < 3:
                         bad_vc = channel.guild.voice_client
                         if bad_vc:
@@ -165,17 +131,6 @@ class Music(commands.Cog):
             self._connecting = False
 
     def cleanup_ffmpeg(self) -> None:
-        """Kill only the ffmpeg process this bot spawned (if any lingers),
-        instead of every ffmpeg.exe on the machine.
-
-        Previously this ran `taskkill /F /IM ffmpeg.exe`, which kills ALL
-        ffmpeg processes system-wide — including ones from unrelated
-        programs (OBS, video editors, other scripts) that happened to be
-        running at the same time. discord.py's FFmpegOpusAudio already
-        terminates its own subprocess via .cleanup() when playback stops,
-        so this is now just a targeted fallback in case that process is
-        somehow still alive.
-        """
         source = self.current_source
         self.current_source = None
         if source is None:
@@ -186,16 +141,14 @@ class Music(commands.Cog):
             return
 
         try:
-            if process.poll() is None:  # still running
+            if process.poll() is None:
                 process.kill()
                 process.wait(timeout=5)
-                logger.info(f"Killed lingering ffmpeg process (pid={process.pid})")
-        except Exception as e:
-            logger.warning(f"Non-fatal error while cleaning up ffmpeg process: {e}")
+        except Exception:
+            pass
 
     @commands.command(name="join", aliases=["j"])
     async def join(self, ctx: commands.Context):
-        """Connect bot to the user's voice channel."""
         if not ctx.author.voice:
             await ctx.send("❌ You need to be in a voice channel first!")
             return
@@ -214,12 +167,10 @@ class Music(commands.Cog):
             await self.safe_connect(channel)
             await ctx.send(f"✅ Joined **{channel}**")
         except Exception as e:
-            logger.error(f"Join error: {e}")
             await ctx.send(f"❌ Could not join: {str(e)}")
 
     @commands.command(name="play", aliases=["p"])
     async def play(self, ctx: commands.Context, *, url: str):
-        """Play a song from the given URL."""
         if self.is_loading:
             await ctx.send("⏳ Already loading a song, please wait...")
             return
@@ -237,7 +188,6 @@ class Music(commands.Cog):
                     await ctx.send("⏳ Already connecting, please wait a moment...")
                     return
             except Exception as e:
-                logger.error(f"Connect error: {e}")
                 await ctx.send(f"❌ Can't connect to voice channel: {str(e)}")
                 return
         else:
@@ -247,7 +197,6 @@ class Music(commands.Cog):
                     await voice_client.move_to(channel)
                     await asyncio.sleep(1)
                 except Exception as e:
-                    logger.error(f"Move error: {e}")
                     await ctx.send(f"❌ Can't move to voice channel: {str(e)}")
                     return
 
@@ -276,8 +225,6 @@ class Music(commands.Cog):
                 self.current_source = source
                 voice_client.play(source, after=after_playing)
 
-                # UI Upgrade: Embed สำหรับเพลงปัจจุบัน — ลิงก์ไปที่วิดีโอ
-                # YouTube จริง (webpage_url) ไม่ใช่ข้อความค้นหาดิบๆ ที่กดไม่ได้
                 embed = discord.Embed(title="🎵 Now Playing", description=f"**[{title}]({webpage_url})**", color=discord.Color.green())
                 if ctx.author.avatar:
                     embed.set_footer(text=f"Requested by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
@@ -285,8 +232,6 @@ class Music(commands.Cog):
                 await ctx.send(embed=embed)
             else:
                 self.queue.append((audio_url, title, webpage_url))
-
-                # UI Upgrade: Embed สำหรับตอนเพิ่มเข้าคิว
                 embed = discord.Embed(title="📝 Added to Queue", description=f"**{title}**", color=discord.Color.orange())
                 embed.add_field(name="Position in Queue", value=f"`#{len(self.queue)}`", inline=True)
                 if ctx.author.avatar:
@@ -295,14 +240,12 @@ class Music(commands.Cog):
                 await ctx.send(embed=embed)
 
         except Exception as e:
-            logger.error(f"Play error: {e}")
             await loading_msg.edit(content=f"❌ Error playing song: {str(e)}")
         finally:
             self.is_loading = False
 
     @commands.command(name="queue", aliases=["q"])
     async def show_queue(self, ctx: commands.Context):
-        """Show the current music queue."""
         if not self.queue:
             embed = discord.Embed(description="📭 **Queue is currently empty!**", color=discord.Color.gold())
             await ctx.send(embed=embed)
@@ -315,7 +258,6 @@ class Music(commands.Cog):
 
     @commands.command(name="skip", aliases=["sk"])
     async def skip(self, ctx: commands.Context):
-        """Skip the current song."""
         if ctx.voice_client and ctx.voice_client.is_playing():
             ctx.voice_client.stop()
             await ctx.send("⏭️ **Skipped current song!**")
@@ -324,7 +266,6 @@ class Music(commands.Cog):
 
     @commands.command(name="disconn", aliases=["dc"])
     async def stop(self, ctx: commands.Context):
-        """Stop and disconnect from voice channel."""
         if not ctx.voice_client:
             await ctx.send("❌ I am not in any voice channel!")
             return
@@ -342,7 +283,6 @@ class Music(commands.Cog):
 
     @commands.command(name="pause", aliases=["ps"])
     async def pause(self, ctx: commands.Context):
-        """Pause the current song."""
         if ctx.voice_client and ctx.voice_client.is_playing():
             ctx.voice_client.pause()
             await ctx.send("⏸️ **Music paused.**")
@@ -351,7 +291,6 @@ class Music(commands.Cog):
 
     @commands.command(name="resume", aliases=["r"])
     async def resume(self, ctx: commands.Context):
-        """Resume the paused song."""
         if ctx.voice_client and ctx.voice_client.is_paused():
             ctx.voice_client.resume()
             await ctx.send("▶️ **Music resumed.**")
@@ -360,81 +299,10 @@ class Music(commands.Cog):
 
     @commands.command(name="clearqueue", aliases=["cq"])
     async def clearqueue(self, ctx: commands.Context):
-        """Clear the music queue."""
         self.queue.clear()
         await ctx.send("🗑️ **Queue has been successfully cleared!**")
 
 
-# ==========================================================================
-# ImageGen cog — Stable Diffusion (Upgraded to Pure Async aiohttp)
-# ==========================================================================
-
-SD_TXT2IMG_URL = "http://127.0.0.1:7860/sdapi/v1/txt2img"
-SD_REQUEST_TIMEOUT_SECONDS = 180
-
-
-class ImageGen(commands.Cog):
-    """Image generation cog using non-blocking aiohttp call & beautiful Embed framing."""
-
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-
-    @commands.command(name="image")
-    async def generate_image(self, ctx: commands.Context, *, prompt: str):
-        """Generate an image from a text prompt via SD WebUI."""
-        status_msg = await ctx.send(f"🎨 **Generating your masterpiece...**\n> *Prompt:* `{prompt}`")
-
-        payload = {
-            "prompt": prompt,
-            "width": 512,
-            "height": 512,
-            "steps": 25,
-            "sampler_name": "Euler a",
-            "batch_size": 1,
-            "override_settings": {"sd_model_checkpoint": "sd-v1-4.ckpt"},
-        }
-
-        try:
-            # 🌟 ปรับปรุง: เปลี่ยนเป็น Async aiohttp แท้ๆ ไม่บล็อกการทำงานบอทแน่นอน
-            async with aiohttp.ClientSession() as session:
-                timeout = aiohttp.ClientTimeout(total=SD_REQUEST_TIMEOUT_SECONDS)
-                async with session.post(SD_TXT2IMG_URL, json=payload, timeout=timeout) as resp:
-                    if resp.status != 200:
-                        await status_msg.edit(content=f"❌ SD API returned error status: `{resp.status}`")
-                        return
-
-                    data = await resp.json()
-
-            # แปลงภาพจาก base64
-            image_bytes = base64.b64decode(data["images"][0])
-            buffer = io.BytesIO(image_bytes)
-            buffer.seek(0)
-
-            # 🌟 UI Upgrade: ส่งภาพแบบกล่องพรีเมียม ฝังภาพลงใน Embed
-            embed = discord.Embed(
-                title="✨ Dream Generated",
-                description=f"**Prompt:** {prompt}",
-                color=discord.Color.purple()
-            )
-            file = discord.File(fp=buffer, filename="generated_art.png")
-            embed.set_image(url="attachment://generated_art.png")
-            if ctx.author.avatar:
-                embed.set_footer(text=f"Artisan: {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
-
-            await status_msg.delete()
-            await ctx.send(file=file, embed=embed)
-
-        except asyncio.TimeoutError:
-            await status_msg.edit(content="⚠️ Stable Diffusion took too long to respond. (Timeout)")
-        except aiohttp.ClientError as e:
-            logger.error(f"Image generation connection error: {e}")
-            await status_msg.edit(content="❌ Connection failed. Please check if your Stable Diffusion WebUI API is running.")
-        except Exception as e:
-            logger.exception("Image generation error")
-            await status_msg.edit(content=f"❌ Something went wrong while drawing: `{str(e)}`")
-
-
 async def setup(bot: commands.Bot):
-    """Load all cogs."""
+    """Load the Music cog."""
     await bot.add_cog(Music(bot))
-    await bot.add_cog(ImageGen(bot))

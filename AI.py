@@ -30,7 +30,7 @@ THINKING_BUFFER = 4096
 MAX_HISTORY_LENGTH = 12   
 HISTORY_KEEP_RECENT = 11  
 
-# คีย์เวิร์ดสำหรับเปิดโหมดค้นหาเว็บอัตโนมัติ
+# Keywords to trigger automatic web search
 SEARCH_TRIGGER_KEYWORDS = [
     "search", "look up", "find", "latest", "today", "news", "google", "current",
     "price", "stock", "ticker", "nasdaq", "nyse", "bitcoin", "btc", "crypto",
@@ -52,7 +52,7 @@ def build_system_prompt(bot_name: str) -> dict:
         "ALWAYS pay attention to the exact text inside the brackets '[ ]' of the MOST RECENT message so you know exactly who you are talking to right now.\n"
         "CRITICAL: Treat the entire text inside the brackets as a SINGLE literal user name. Do not split, break, or semantically interpret the name even if it contains spaces, symbols, or multiple words (e.g., if the name is '[Peaku ! Ruk บี๋]', their name is 'Peaku ! Ruk บี๋', do not split it into Peaku and Ruk บี๋).\n"
         f"If asked who you are, your name is '{bot_name}'.\n"
-        "If a user asks who THEY are (e.g., 'Who am I?' or 'เราชื่ออะไร'), answer with their exact name from inside the brackets of the current message prefix.\n"
+        "If a user asks who THEY are (e.g., 'Who am I?' or 'What is my name'), answer with their exact name from inside the brackets of the current message prefix.\n"
         "Be concise and answer directly.\n"
         "IMPORTANT: Always reply in the exact same language that the user used in their message."
     )
@@ -85,7 +85,7 @@ class AI(commands.Cog):
             self.channel_conversations[channel_id] = [history[0]] + history[-HISTORY_KEEP_RECENT:]
 
     async def execute_search(self, query: str) -> str:
-        """ดึงข้อมูลจาก DuckDuckGo HTML search (ไม่ต้องใช้ JS, ไม่มี CAPTCHA wall แบบ Google)"""
+        """Fetch data from DuckDuckGo HTML search (No JS required, no Google CAPTCHA wall)."""
         url = "https://html.duckduckgo.com/html/"
         params = {"q": query}
 
@@ -98,15 +98,15 @@ class AI(commands.Cog):
             async with aiohttp.ClientSession() as session:
                 async with session.post(url, data=params, headers=headers, timeout=10) as resp:
                     if resp.status == 429:
-                        return "⚠️ ระบบค้นหาป้องกันการค้นหาถี่เกินไป (โดนบล็อกชั่วคราว) โปรดรอสักครู่"
+                        return "⚠️ Search system blocked due to rate limiting. Please wait a moment."
                     if resp.status != 200:
-                        return f"⚠️ ระบบค้นหาปฏิเสธการเข้าถึง (รหัสข้อผิดพลาด {resp.status})"
+                        return f"⚠️ Search system denied access (Error code: {resp.status})"
 
                     html = await resp.text()
                     soup = BeautifulSoup(html, "html.parser")
 
                     results = []
-                    # DuckDuckGo HTML: แต่ละผลลัพธ์อยู่ใน div.result
+                    # DuckDuckGo HTML: Each result is inside div.result
                     for result in soup.find_all('div', class_='result')[:5]:
                         title_tag = result.find('a', class_='result__a')
                         desc_tag = result.find('a', class_='result__snippet') or result.find('div', class_='result__snippet')
@@ -117,28 +117,28 @@ class AI(commands.Cog):
                         title = title_tag.get_text(strip=True)
                         raw_link = title_tag.get('href', '')
 
-                        # DuckDuckGo ห่อลิงก์จริงไว้ใน redirect param uddg=
+                        # DuckDuckGo wraps the real link in the redirect param uddg=
                         parsed = urllib.parse.urlparse(raw_link)
                         qs = urllib.parse.parse_qs(parsed.query)
                         real_link = qs.get('uddg', [raw_link])[0]
 
-                        desc = desc_tag.get_text(strip=True) if desc_tag else "ไม่มีคำอธิบายเพิ่มเติม"
+                        desc = desc_tag.get_text(strip=True) if desc_tag else "No additional description available."
                         results.append(f"**{title}**\n   🔗 {real_link}\n   📄 {desc}")
 
                         if len(results) >= 3:
                             break
 
                     if not results:
-                        return "🔍 ค้นหาสำเร็จ แต่ไม่พบผลลัพธ์ที่เกี่ยวข้อง"
+                        return "🔍 Search successful, but no relevant results found."
 
                     lines = [f"{i+1}. {res}" for i, res in enumerate(results)]
                     return "🔍 Search Results:\n" + "\n".join(lines)
 
         except asyncio.TimeoutError:
-            return "⚠️ ระบบค้นหาใช้เวลานานเกินไป (Timeout) กรุณาลองใหม่"
+            return "⚠️ Search request timed out. Please try again."
         except Exception as e:
             logger.error(f"Search failed: {e}")
-            return "⚠️ ระบบค้นหามีปัญหาขัดข้อง กรุณาลองใหม่ครับ"
+            return "⚠️ Search system encountered an error. Please try again."
 
     @commands.command(name="search", aliases=["s"])
     async def search_command(self, ctx: commands.Context, *, query: str):
@@ -169,7 +169,7 @@ class AI(commands.Cog):
         async with ctx.typing():
             reply, _ = await self.generate(self.chat_model, temp_history, num_predict=2048)
 
-        # ลบชื่อบอทที่อาจจะหลอนพิมพ์นำหน้ามา
+        # Remove the bot's name if it hallucinates and prepends it
         bot_name = self.bot.user.name if self.bot.user else ""
         if bot_name and reply.lower().startswith(f"{bot_name.lower()}:"):
             reply = reply[len(bot_name)+1:].strip()
@@ -180,7 +180,7 @@ class AI(commands.Cog):
         elif reply.lower().startswith("[ai]:"):
             reply = reply[5:].strip()
 
-        # จัดการข้อความยาวเกิน 2,000 ตัวอักษร
+        # Handle messages longer than 2000 characters
         if len(reply) > 1950:
             chunks = [reply[i:i+1950] for i in range(0, len(reply), 1950)]
             await status_msg.edit(content=chunks[0])
@@ -293,7 +293,7 @@ class AI(commands.Cog):
         elif reply.lower().startswith(f"[{ctx.me.display_name.lower()}]:"):
             reply = reply[len(ctx.me.display_name)+4:].strip()
 
-        # จัดการข้อความยาวเกิน 2,000 ตัวอักษรสำหรับแชทปกติ
+        # Handle messages longer than 2000 characters
         if status_msg is not None:
             try:
                 if len(reply) > 1950:

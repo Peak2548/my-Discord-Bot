@@ -1,11 +1,11 @@
 @echo off
 setlocal EnableDelayedExpansion
 
-REM เปิดใช้งาน Virtual Environment (venv) ก่อนรันบอท
+echo [INFO] Activating Virtual Environment...
 if exist "%~dp0venv\Scripts\activate.bat" (
     call "%~dp0venv\Scripts\activate.bat"
 ) else (
-    echo [WARNING] ไม่พบโฟลเดอร์ venv บอทจะใช้ Python หลักของเครื่องแทน
+    echo [WARNING] venv folder not found! The bot will use the system's global Python.
 )
 
 REM Check if Python is available
@@ -16,11 +16,19 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-REM Run the bot with error handling and auto-close on completion
-echo [INFO] Starting Discord Bot...
-python "%~dp0MainBot.py"
+REM 1. Upgrade pip to the latest version
+echo [INFO] Upgrading pip...
+python -m pip install --upgrade pip
 
-REM Auto-close when script finishes (success or error)
+REM 2. Force upgrade all required libraries (bypassing cache)
+echo [INFO] Checking and upgrading libraries from requirements.txt...
+pip install --no-cache-dir --upgrade -r "%~dp0requirements.txt"
+
+REM Run the bot
+echo [INFO] Starting Discord Bot...
+python "%~dp0Main.py"
+
+REM Auto-close when script finishes
 echo [INFO] Bot has stopped. Closing...
 timeout /t 2 >nul
 exit /b 0

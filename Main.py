@@ -15,12 +15,13 @@ logger = logging.getLogger(__name__)
 # Configure a JavaScript runtime (deno) for yt-dlp's YouTube signature/
 # n-challenge solving.
 # --------------------------------------------------------------------------
-# เดิม: hardcode path ตายตัว 'C:\Users\Peako\.deno\bin\deno.exe' — ถ้าลง
-# ใหม่/ย้ายเครื่อง/deno ไม่ได้อยู่ตรงนั้นแล้ว จะเซ็ต env ไปชี้ไฟล์ที่ไม่มีจริง
-# โดยไม่มี error แจ้งเตือนใดๆ (yt-dlp แค่จะ warn เฉยๆ ตอนรันจริง)
+# Original: hardcoded path 'C:\Users\Peako\.deno\bin\deno.exe' — if reinstalled/
+# moved/deno is not there, it sets an env var pointing to a non-existent file
+# without any error (yt-dlp will only warn during execution).
 #
-# แก้ไข: เช็คไฟล์ตาม path เดิมก่อน (เผื่อคุณล็อกไว้แบบนั้นตั้งใจ) ถ้าไม่เจอ
-# ค่อย fallback ไปหาใน PATH ของระบบอัตโนมัติด้วย shutil.which()
+# Fix: Check the file at the original path first (in case it was intentionally 
+# locked). If not found, fallback to searching in the system PATH automatically 
+# using shutil.which().
 _HARDCODED_DENO_PATH = r'C:\Users\Peako\.deno\bin\deno.exe'
 
 _deno_path = _HARDCODED_DENO_PATH if os.path.isfile(_HARDCODED_DENO_PATH) else shutil.which('deno')
@@ -58,20 +59,13 @@ async def on_ready():
 
 async def main():
     async with bot:
-        # Force aiohttp to use the system's standard resolver (ThreadedResolver)
-        # instead of aiodns/pycares, which fails to resolve DNS on some
-        # machines/venvs (causing "Could not contact DNS servers" and
-        # preventing connection to discord.com).
         bot.http.connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
 
-        # Load both extensions:
-        #  - BotCommands.py: Music + ImageGen cogs
-        #  - AI.py: the full-featured AI cog (shared channel history,
-        #    !models, real web search, etc.)
-        # These must NOT both define an "AI" cog / `!ai` command, or
-        # discord.py will raise a CommandRegistrationError on startup.
-        await bot.load_extension("BotCommands")
+        # Load all 3 extensions
+        await bot.load_extension("Music")
+        await bot.load_extension("Commands")
         await bot.load_extension("AI")
+        
         await bot.start(TOKEN)
 
 

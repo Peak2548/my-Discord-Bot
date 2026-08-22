@@ -1,5 +1,5 @@
 # --- Discord bot core ---
-discord.py
+discord.py[voice]
 python-dotenv
 aiohttp
 PyNaCl
@@ -7,9 +7,6 @@ PyNaCl
 # --- Web search (AI.py: !search / !ai auto-search) ---
 beautifulsoup4
 
-# --- Music (BotCommands.py: !play) ---
+# --- Music (Music.py: !play) ---
 yt-dlp
 yt-dlp-ejs
-
-# --- Image generation (BotCommands.py: !image) ---
-Pillow
