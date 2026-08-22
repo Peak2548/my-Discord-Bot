@@ -65,6 +65,7 @@ async def main():
         await bot.load_extension("Music")
         await bot.load_extension("Commands")
         await bot.load_extension("AI")
+        await bot.load_extension("RP")
         
         await bot.start(TOKEN)
 
