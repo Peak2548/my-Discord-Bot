@@ -34,9 +34,10 @@ class Music(commands.Cog):
         self.queue: deque = deque()
         self.is_playing = False
         self._connecting = False
+        self.was_queued = False  # ตัวแปรเช็คว่ามีการใช้คิวหรือไม่
         self.current_source: Optional[discord.FFmpegOpusAudio] = None
 
-    async def extract_audio(self, url: str, retries: int = 2) -> tuple[str, str, str]:
+    async def extract_audio(self, url: str, retries: int = 2) -> tuple[str, str, str, str]:
         loop = asyncio.get_event_loop()
         last_error: Exception | None = None
 
@@ -49,9 +50,11 @@ class Music(commands.Cog):
                     audio_url = info.get('url')
                     title = info.get('title', 'Unknown') or 'Unknown'
                     webpage_url = info.get('webpage_url') or info.get('original_url') or url
+                    thumbnail = info.get('thumbnail') or ''
+                    
                     if not audio_url:
                         raise yt_dlp.utils.ExtractorError("No audio URL returned")
-                    return audio_url, title, webpage_url
+                    return audio_url, title, webpage_url, thumbnail
             except yt_dlp.utils.YoutubeDLError as e:
                 last_error = e
                 logger.warning(f"yt-dlp extraction attempt {attempt}/{retries} failed: {e}")
@@ -68,16 +71,19 @@ class Music(commands.Cog):
     async def play_next(self, ctx: commands.Context):
         if not self.queue:
             self.is_playing = False
-            embed = discord.Embed(description="✅ **Queue finished!** No more songs to play.", color=discord.Color.green())
-            await ctx.send(embed=embed)
+            if self.was_queued:
+                embed = discord.Embed(description="✅ **Queue finished!** No more songs to play.", color=discord.Color.green())
+                await ctx.send(embed=embed)
+                self.was_queued = False
             return
 
         if not ctx.voice_client or not ctx.voice_client.is_connected():
             self.queue.clear()
+            self.was_queued = False
             self.is_playing = False
             return
 
-        audio_url, title, webpage_url = self.queue.popleft()
+        audio_url, title, webpage_url, thumbnail = self.queue.popleft()
         voice_client = ctx.voice_client
 
         def after_playing(error):
@@ -91,6 +97,8 @@ class Music(commands.Cog):
         voice_client.play(source, after=after_playing)
 
         embed = discord.Embed(title="🎵 Now Playing", description=f"**[{title}]({webpage_url})**", color=discord.Color.blurple())
+        if thumbnail:
+            embed.set_image(url=thumbnail)  # 🌟 เปลี่ยนเป็น set_image เพื่อให้รูปใหญ่เต็มตา
         if ctx.author.avatar:
             embed.set_footer(text=f"Requested by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
         await ctx.send(embed=embed)
@@ -111,9 +119,8 @@ class Music(commands.Cog):
             last_error = None
             for attempt in range(1, 4):
                 try:
-                    # 🌟 แก้ไขตรงนี้: เพิ่ม timeout เป็น 20.0 และเปลี่ยน reconnect เป็น True
                     vc = await channel.connect(timeout=20.0, reconnect=True, self_deaf=True)
-                    await asyncio.sleep(1) # เพิ่มเวลาพักให้ Handshake เสร็จสมบูรณ์
+                    await asyncio.sleep(1)
                     return vc
                 except Exception as e:
                     last_error = e
@@ -209,7 +216,7 @@ class Music(commands.Cog):
                     video_id = url.split('v=')[1].split('&')[0]
                     url = f"https://www.youtube.com/watch?v={video_id}"
 
-            audio_url, title, webpage_url = await self.extract_audio(url)
+            audio_url, title, webpage_url, thumbnail = await self.extract_audio(url)
             if not audio_url:
                 await loading_msg.edit(content="❌ Could not find audio URL")
                 return
@@ -226,13 +233,19 @@ class Music(commands.Cog):
                 voice_client.play(source, after=after_playing)
 
                 embed = discord.Embed(title="🎵 Now Playing", description=f"**[{title}]({webpage_url})**", color=discord.Color.green())
+                if thumbnail:
+                    embed.set_image(url=thumbnail)
                 if ctx.author.avatar:
                     embed.set_footer(text=f"Requested by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
                 await loading_msg.delete()
                 await ctx.send(embed=embed)
             else:
-                self.queue.append((audio_url, title, webpage_url))
-                embed = discord.Embed(title="📝 Added to Queue", description=f"**{title}**", color=discord.Color.orange())
+                self.queue.append((audio_url, title, webpage_url, thumbnail))
+                self.was_queued = True 
+                
+                embed = discord.Embed(title="📝 Added to Queue", description=f"**[{title}]({webpage_url})**", color=discord.Color.orange())
+                if thumbnail:
+                    embed.set_image(url=thumbnail)
                 embed.add_field(name="Position in Queue", value=f"`#{len(self.queue)}`", inline=True)
                 if ctx.author.avatar:
                     embed.set_footer(text=f"Added by {ctx.author.display_name}", icon_url=ctx.author.display_avatar.url)
@@ -251,7 +264,7 @@ class Music(commands.Cog):
             await ctx.send(embed=embed)
             return
 
-        queue_list = "\n".join(f"`{i + 1}.` {title}" for i, (_, title, _) in enumerate(self.queue))
+        queue_list = "\n".join(f"`{i + 1}.` {title}" for i, (_, title, _, _) in enumerate(self.queue))
         embed = discord.Embed(title="🎵 Current Music Queue", description=queue_list, color=discord.Color.blue())
         embed.set_footer(text=f"Total Songs: {len(self.queue)} | Requested by {ctx.author.display_name}")
         await ctx.send(embed=embed)
@@ -271,6 +284,7 @@ class Music(commands.Cog):
             return
 
         self.queue.clear()
+        self.was_queued = False
         if ctx.voice_client.is_playing() or ctx.voice_client.is_paused():
             ctx.voice_client.stop()
         try:
@@ -300,6 +314,7 @@ class Music(commands.Cog):
     @commands.command(name="clearqueue", aliases=["cq"])
     async def clearqueue(self, ctx: commands.Context):
         self.queue.clear()
+        self.was_queued = False
         await ctx.send("🗑️ **Queue has been successfully cleared!**")
 
 
